@@ -20,6 +20,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/doctor"
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
 	"github.com/Common-Pattern/claudeflow/internal/housekeep"
@@ -50,6 +51,7 @@ Commands:
   stop           pause, then stop every live run
   land <pr>      merge a green pull request and sync the checkout
   housekeep      reclaim landed worktrees now
+  doctor         check dependencies, authentication and configuration
   labels         create or update the labels in the repository
   version        print version information
 
@@ -81,10 +83,17 @@ func run() error {
 		return nil
 	}
 
-	cfg, err := loadConfig(*cfgPath)
-	if err != nil {
-		return err
+	// doctor runs before the config is required: "can this host run anything"
+	// is a useful question when the config is the thing that is wrong.
+	cfg, cfgErr := loadConfig(*cfgPath)
+	if cmd == "doctor" {
+		return runDoctor(cfg, cfgErr == nil)
 	}
+	if cfgErr != nil {
+		return cfgErr
+	}
+	err := error(nil)
+	_ = err
 	st, err := state.Open(cfg.Paths.State)
 	if err != nil {
 		return err
@@ -130,6 +139,20 @@ func run() error {
 		flag.Usage()
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// runDoctor reports on the host and exits non-zero if anything would stop a
+// run, so it is usable as a precondition in a script.
+func runDoctor(cfg config.Config, haveConfig bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	report := doctor.Run(ctx, doctor.Options{Cfg: cfg, HaveConfig: haveConfig})
+	fmt.Print(report)
+	if report.Failed() {
+		return errors.New("doctor found problems that would stop a run")
+	}
+	return nil
 }
 
 func loadConfig(path string) (config.Config, error) {

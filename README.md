@@ -19,34 +19,47 @@ varies between projects is a hook or a config key.
 > **Early. The command-line interface and the configuration schema may change
 > between versions.** Pin a version if you depend on either.
 
-## Runtime dependencies
+## Prerequisites
 
-| Dependency | Why |
-| --- | --- |
-| `gh`, authenticated | every GitHub call goes through it |
-| `git` | worktrees, branches, merges |
-| an agent CLI (`claude` by default) | does the actual work |
-
-claudeflow holds no GitHub token of its own. It shells out to `gh` because `gh`
-already holds the operator's credentials, refreshes them when they expire, and
-resolves the host — so the same binary works against github.com and an
-enterprise host with no additional configuration. The consequence: whatever
-`gh auth status` reports is what claudeflow can do, and re-authenticating `gh`
-is how you fix a permissions failure.
-
-**`git` needs a committer identity.** Landing creates a merge commit, so a host
-without `user.name` and `user.email` fails with `Committer identity unknown`
-part-way through a run — after the agent has done all the work. A fresh
-container or CI runner is the usual place this bites.
-
-Check before first run:
+Check everything at once:
 
 ```sh
-gh auth status
-git --version
-git config user.email   # must print something
-claude --version
+claudeflow doctor
 ```
+
+It exits non-zero if anything would stop a run, so it works as a precondition
+in a script. Run it without a configuration to ask only "can this host run
+anything"; run it beside a `claudeflow.yaml` to check that too.
+
+| Requirement | Why | How to check |
+| --- | --- | --- |
+| `git` on PATH | worktrees, branches, merges | `git --version` |
+| **a git committer identity** | landing creates a merge commit | `git config user.email` |
+| `gh` on PATH | every GitHub call goes through it | `gh --version` |
+| **`gh` authenticated** | claudeflow holds no token of its own | `gh auth status` |
+| read/write access to the repository | claiming, commenting, merging | `gh repo view <owner/name>` |
+| an agent CLI (`claude` by default) | does the actual work | `claude --version` |
+| a Compose implementation | brings each run's environment up | `docker compose version` |
+| a Compose file in the project | the environment contract; required | `compose.file` in the config |
+| a git checkout at `paths.root` | every run's worktree is cut from it | `git -C <root> rev-parse --git-dir` |
+
+Three of these are worth calling out, because each fails late — during a run,
+long after the cause, with nobody watching:
+
+- **The git identity.** Without `user.name` and `user.email`, landing fails with
+  `Committer identity unknown` *after* the agent has done all of the work. A
+  fresh container or CI runner is the usual place this bites.
+- **`gh` authentication.** claudeflow holds no GitHub token. It shells out to
+  `gh` because `gh` already holds the operator's credentials, refreshes them,
+  and resolves the host — so the same binary works against github.com and an
+  enterprise host with no extra configuration. The consequence: whatever
+  `gh auth status` reports is exactly what claudeflow can do, and
+  re-authenticating `gh` is how a permissions failure gets fixed.
+- **The Compose implementation.** Not every one is equal. Some accept being
+  invoked and then hang on the first real command, which presents as a run that
+  never starts rather than as an error. `doctor` asks yours for its version
+  rather than only finding it on PATH, and `compose.bin` names one explicitly
+  where the engine's default is not the one you want.
 
 ## Install
 
@@ -285,6 +298,7 @@ checkout left running, which claudeflow's own records cannot.
 | `claudeflow pause` | stop dispatching new runs. Live runs continue |
 | `claudeflow resume` | undo `pause` |
 | `claudeflow stop` | stop live runs |
+| `claudeflow doctor` | check dependencies, authentication and configuration. Non-zero if a run would not get far |
 | `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
 | `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
 | `claudeflow labels` | create or update the six labels in the repository. Run once per repo |
@@ -293,6 +307,7 @@ checkout left running, which claudeflow's own records cannot.
 A first run:
 
 ```sh
+claudeflow doctor          # dependencies, auth, config
 claudeflow labels          # create the label set in the repo
 gh issue edit 412 --add-label claude
 claudeflow once            # one tick, in the foreground
