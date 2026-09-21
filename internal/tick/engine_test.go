@@ -124,3 +124,45 @@ func TestStrandedReleaseOnlyRemovesWorking(t *testing.T) {
 		t.Errorf("labels = %v, want exactly the queued label", labels)
 	}
 }
+
+// A project points its own tooling at the run's containers through agent.env.
+// Without it a test suite that refuses to guess its database — the correct
+// behaviour — has nothing to be told, and the run cannot verify anything.
+func TestExpandAgentEnv(t *testing.T) {
+	resolved := map[string]string{
+		"CLAUDEFLOW_PORT_POSTGRES": "49153",
+		"CLAUDEFLOW_HOST_POSTGRES": "bigone.example.net",
+		"CLAUDEFLOW_URL_WEB":       "http://bigone.example.net:49154",
+	}
+	got := expandAgentEnv(map[string]string{
+		"DATABASE_URL": "postgresql://u:p@${CLAUDEFLOW_HOST_POSTGRES}:${CLAUDEFLOW_PORT_POSTGRES}/app_test",
+		"BASE_URL":     "${CLAUDEFLOW_URL_WEB}",
+		"LITERAL":      "no placeholders here",
+	}, resolved)
+
+	if want := "postgresql://u:p@bigone.example.net:49153/app_test"; got["DATABASE_URL"] != want {
+		t.Errorf("DATABASE_URL = %q, want %q", got["DATABASE_URL"], want)
+	}
+	if got["BASE_URL"] != resolved["CLAUDEFLOW_URL_WEB"] {
+		t.Errorf("BASE_URL = %q", got["BASE_URL"])
+	}
+	if got["LITERAL"] != "no placeholders here" {
+		t.Errorf("LITERAL = %q, want it untouched", got["LITERAL"])
+	}
+}
+
+// An unresolvable placeholder must expand to empty rather than be left as
+// literal text: a DSN containing "${...}" would be dialled and fail somewhere
+// far from the cause.
+func TestExpandAgentEnvUnknownPlaceholder(t *testing.T) {
+	got := expandAgentEnv(map[string]string{"X": "a-${NOPE}-b"}, map[string]string{})
+	if got["X"] != "a--b" {
+		t.Errorf("X = %q, want the placeholder emptied", got["X"])
+	}
+}
+
+func TestExpandAgentEnvEmpty(t *testing.T) {
+	if got := expandAgentEnv(nil, map[string]string{"A": "1"}); len(got) != 0 {
+		t.Errorf("= %v, want empty", got)
+	}
+}

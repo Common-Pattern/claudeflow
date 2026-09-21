@@ -235,6 +235,14 @@ type Agent struct {
 	// AutoUpdate runs the agent CLI's own update command once a day, when
 	// nothing is live.
 	AutoUpdate bool `yaml:"autoUpdate"`
+	// Env is extra environment for the run, expanded against the stack's
+	// resolved addresses — CLAUDEFLOW_PORT_<SERVICE>, CLAUDEFLOW_HOST_<SERVICE>
+	// and CLAUDEFLOW_URL_<SERVICE>.
+	//
+	// This is how a project points its own tooling at the run's containers.
+	// Without it a test suite that refuses to guess its database — the correct
+	// behaviour — has nothing to be told, and the run cannot verify anything.
+	Env map[string]string `yaml:"env"`
 }
 
 // Paths locates the checkout and claudeflow's own state.

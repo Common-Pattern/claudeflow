@@ -434,8 +434,23 @@ func (e Engine) serviceURLs(ctx context.Context, n int) map[string]string {
 		if i := strings.LastIndex(addr, ":"); i >= 0 {
 			hostPort = addr[i+1:]
 		}
-		key := "CLAUDEFLOW_URL_" + strings.ToUpper(strings.ReplaceAll(service, "-", "_"))
-		out[key] = fmt.Sprintf("http://%s:%s", e.Cfg.Compose.URLHost(), hostPort)
+		name := strings.ToUpper(strings.ReplaceAll(service, "-", "_"))
+		// A URL is only useful for something that speaks HTTP. The port and
+		// host are given separately so a project can build any address it
+		// needs — a Postgres DSN, a Redis URL, anything.
+		out["CLAUDEFLOW_PORT_"+name] = hostPort
+		out["CLAUDEFLOW_HOST_"+name] = e.Cfg.Compose.URLHost()
+		out["CLAUDEFLOW_URL_"+name] = fmt.Sprintf("http://%s:%s", e.Cfg.Compose.URLHost(), hostPort)
+	}
+	return out
+}
+
+// expandAgentEnv resolves the project's declared environment against the
+// stack's addresses, so a value can name a service without knowing its port.
+func expandAgentEnv(declared map[string]string, resolved map[string]string) map[string]string {
+	out := make(map[string]string, len(declared))
+	for k, v := range declared {
+		out[k] = os.Expand(v, func(name string) string { return resolved[name] })
 	}
 	return out
 }
@@ -526,7 +541,11 @@ func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {
 		"CLAUDEFLOW_LABEL_PLANNING": l.Planning,
 	}
 	if s.Kind.HoldsSlot() {
-		for k, v := range e.serviceURLs(ctx, s.Slot) {
+		resolved := e.serviceURLs(ctx, s.Slot)
+		for k, v := range resolved {
+			env[k] = v
+		}
+		for k, v := range expandAgentEnv(e.Cfg.Agent.Env, resolved) {
 			env[k] = v
 		}
 	}
