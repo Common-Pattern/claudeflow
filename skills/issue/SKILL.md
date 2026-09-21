@@ -189,55 +189,28 @@ stays open for someone to close by hand.
 
 Also include what changed, how it was verified, and any note from step 6.
 
-## 8. Get CI green
+## 8. Stop
 
-```
-gh pr checks <pr> --repo "$CLAUDEFLOW_REPO" --watch --fail-fast --interval 30
-```
+That is the whole run. Push the pull request and stop.
 
-**Two ways this exits 0 without having watched your commit**, both silent. It
-returns seconds after `gh pr create` with only fast deployment checks present
-while the real suite is still queued, and it reports the *previous* commit's run
-when the new one is not scheduled yet. Before believing a green table, confirm
-the project's real checks are in `gh pr checks <pr> --json name,state`, and that
-the run's `headSha` is `git rev-parse HEAD`.
+**Do not wait for the checks.** claudeflow is watching them and does the rest:
+it lands the pull request when they are green, and if they go red it starts a
+fresh run with the failure already identified. Sitting in a check-watching loop
+would hold an environment and a model session for ten or twenty minutes to do
+nothing but poll, and it is the step most likely to end a run one move from
+finished.
 
-`--watch` blocks, which is the point: stay in it until it returns. A run that
-stops here leaves a finished pull request that nobody merges.
+Do not merge anything. Do not set the landed label — claudeflow sets it when the
+work is actually on the integration branch, which is the only point at which it
+is true.
 
-On red, read *which step* failed before reading anything into the job name. A
-failure in job setup means no project code ran, so it is never your diff.
+Comment on the issue with the pull request link and what you changed, then stop.
 
-**Three attempts.** Then label the issue blocked, comment the failing log, and
-stop. A loop that keeps pushing at a failure it does not understand burns a slot
-for hours.
+## What happens after you stop
 
-## 9. Land it
+claudeflow watches the checks, lands the pull request on green, sets the landed
+label and comments the result on the issue. On red it starts a fix run. After
+three failed attempts it labels the issue blocked and leaves the branch intact.
 
-The user tests the integration branch, not pull request branches. Work that
-stops at a green pull request is invisible to them, so green CI is not the end
-of this run.
-
-```
-claudeflow land <pr>
-```
-
-It serialises against other runs, brings the branch up to date with the
-integration branch and re-waits on CI if it had fallen behind, confirms the
-required checks are genuinely green, merges, fast-forwards the local checkout,
-re-runs the install hook, and keeps the standing pull request open.
-
-Do not do any of that by hand and do not work around a non-zero exit — report it,
-label the issue blocked, and stop. Do not retry the merge.
-
-## 10. Finish
-
-```
-gh issue edit "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" \
-  --add-label "$CLAUDEFLOW_LABEL_LANDED" --remove-label "$CLAUDEFLOW_LABEL_WORKING"
-```
-
-Comment on the issue: the pull request link, what changed, what you verified, and
-that it is now on the integration branch. Then stop.
-
-Leave the issue open. Closing it is the user's, after they have looked.
+The issue stays open either way. Closing it is the user's, after they have
+looked.

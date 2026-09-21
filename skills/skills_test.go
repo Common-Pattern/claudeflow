@@ -29,9 +29,10 @@ func TestAllSkillsAreEmbedded(t *testing.T) {
 // mentioning them is a run that will not know where it is.
 func TestSkillsReferenceTheContract(t *testing.T) {
 	for name, required := range map[Name][]string{
-		Issue:    {"CLAUDEFLOW_ISSUE", "CLAUDEFLOW_BRANCH", "CLAUDEFLOW_VERIFY", "claudeflow land"},
-		Review:   {"CLAUDEFLOW_PR", "CLAUDEFLOW_USER", "claudeflow land"},
+		Issue:    {"CLAUDEFLOW_ISSUE", "CLAUDEFLOW_BRANCH", "CLAUDEFLOW_VERIFY"},
+		Review:   {"CLAUDEFLOW_PR", "CLAUDEFLOW_USER"},
 		Planning: {"CLAUDEFLOW_ISSUE", "CLAUDEFLOW_LABEL_QUESTION"},
+		Fix:      {"CLAUDEFLOW_PR", "CLAUDEFLOW_FAILING_CHECKS", "CLAUDEFLOW_VERIFY"},
 	} {
 		raw, err := Read(name, "")
 		if err != nil {
@@ -129,5 +130,34 @@ func TestInstallIsRepeatable(t *testing.T) {
 func TestReadUnknownSkill(t *testing.T) {
 	if _, err := Read(Name("nope"), ""); err == nil {
 		t.Fatal("Read of an unknown skill succeeded, want error")
+	}
+}
+
+// Waiting on checks is claudeflow's job now. A skill that still tells the agent
+// to watch them puts back the cost the split removed — an environment and a
+// model session held for a run's worth of polling.
+func TestNoSkillWaitsOnChecks(t *testing.T) {
+	for _, name := range All() {
+		raw, err := Read(name, "")
+		if err != nil {
+			t.Fatalf("Read(%s): %v", name, err)
+		}
+		if strings.Contains(string(raw), "--watch") {
+			t.Errorf("skill %s still tells the agent to watch checks", name)
+		}
+	}
+}
+
+// Every skill must say the run has no second turn: it is the instruction whose
+// absence left a finished pull request unmerged.
+func TestEverySkillSaysThereIsNoSecondTurn(t *testing.T) {
+	for _, name := range []Name{Issue, Review, Fix} {
+		raw, err := Read(name, "")
+		if err != nil {
+			t.Fatalf("Read(%s): %v", name, err)
+		}
+		if !strings.Contains(string(raw), "no second turn") {
+			t.Errorf("skill %s does not say the run has no second turn", name)
+		}
 	}
 }

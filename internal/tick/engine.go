@@ -49,6 +49,12 @@ func (e Engine) Once(ctx context.Context) error {
 	if err := e.Reap(ctx); err != nil {
 		return err
 	}
+	// Runs waiting on checks are advanced before anything new is dispatched:
+	// landing finished work matters more than starting more of it, and a
+	// landed run frees nothing until it is resolved.
+	if err := e.advanceAwaitingCI(ctx); err != nil {
+		e.logf("advancing checks: %v", err)
+	}
 	if err := DispatchBlocked(e.Store, e.now()); err != nil {
 		e.logf("not dispatching: %v", err)
 		return nil
@@ -159,7 +165,10 @@ func (e Engine) liveRuns() ([]state.Run, error) {
 	}
 	var live []state.Run
 	for _, r := range all {
-		if runner.AliveSince(r.PID, r.Started) {
+		// A run waiting on checks has no process by design, but it still owns
+		// its issue: counting only live pids would dispatch a second run on an
+		// issue whose pull request is already open.
+		if r.InPhase(state.PhaseAwaitingCI) || runner.AliveSince(r.PID, r.Started) {
 			live = append(live, r)
 		}
 	}
@@ -173,10 +182,25 @@ func (e Engine) Reap(ctx context.Context) error {
 		return err
 	}
 	for _, r := range all {
+		if r.InPhase(state.PhaseAwaitingCI) {
+			// Not this function's business: no process, by design.
+			continue
+		}
 		if runner.AliveSince(r.PID, r.Started) {
 			continue
 		}
 		e.logf("%s: run finished", r.ID())
+
+		// An agent that opened a pull request has done its part. The waiting
+		// is claudeflow's from here, so the run is parked rather than resolved.
+		if r.Branch != "" {
+			if pr, err := e.Client.PRForBranch(ctx, r.Branch); err == nil && pr > 0 {
+				if err := e.awaitCI(ctx, r, pr); err != nil {
+					e.logf("%s: %v", r.ID(), err)
+				}
+				continue
+			}
+		}
 
 		if r.Kind != state.KindReview {
 			if err := e.resolveAbandoned(ctx, r); err != nil {
@@ -221,6 +245,7 @@ func (e Engine) releaseStrandedClaims(ctx context.Context) error {
 	for _, r := range runs {
 		live[r.Ref] = struct{}{}
 	}
+	_ = live
 
 	for _, issue := range claimed {
 		if _, ok := live[issue.Number]; ok {

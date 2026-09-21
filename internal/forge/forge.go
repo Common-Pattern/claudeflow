@@ -192,6 +192,13 @@ type Client interface {
 	LatestCommentBy(ctx context.Context, target Target, number int, user string) (time.Time, error)
 	// StandingPR returns the single open pull request from head into base.
 	StandingPR(ctx context.Context, base, head string) (int, error)
+	// PRForBranch returns the open pull request whose head is branch, or zero
+	// when there is none.
+	//
+	// This is how claudeflow learns what a run produced without the agent
+	// having to report it: the branch name is already known, so no protocol
+	// between them is needed and none can be forgotten.
+	PRForBranch(ctx context.Context, branch string) (int, error)
 	// EnsureLabel creates or updates a label definition.
 	EnsureLabel(ctx context.Context, name, color, description string) error
 	// Checks returns the status checks on a pull request.

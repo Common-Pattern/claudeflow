@@ -143,7 +143,6 @@ instructions say. If you cannot, note it in the pull request body and carry on.
 git push -u origin "$CLAUDEFLOW_BRANCH"
 gh pr create --repo "$CLAUDEFLOW_REPO" --base "$CLAUDEFLOW_INTEGRATION" \
   --head "$CLAUDEFLOW_BRANCH" --title "Review fixes from #$CLAUDEFLOW_PR" --body-file <path>
-gh pr checks <pr> --repo "$CLAUDEFLOW_REPO" --watch --fail-fast --interval 30
 ```
 
 If any comment you acted on named an issue that this fix completes, put
@@ -152,21 +151,10 @@ pull request as `Fixes #<issue>`, which is what closes the issue when the
 operator merges — a closing reference on a branch that merges into the
 integration branch closes nothing on its own.
 
-`gh pr checks` exits 0 without having watched your commit in two ways — only the
-fast deployment checks scheduled yet, or the previous commit's run. Confirm the
-project's real checks are in `gh pr checks <pr> --json name,state` and that the
-run's `headSha` is `git rev-parse HEAD`.
-
-Three fix attempts on red, then stop and say so in the thread.
-
-Then:
-
-```
-claudeflow land <pr>
-```
-
-Do not do its steps by hand and do not retry it on a non-zero exit. Report what
-it said and stop.
+**Do not wait for the checks.** claudeflow is watching them: it lands the pull
+request on green, and starts a fresh run with the failure named if they go red.
+Waiting here would hold an environment and a model session to do nothing but
+poll.
 
 ## 6. Close the loop
 

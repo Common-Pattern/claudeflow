@@ -25,6 +25,8 @@ type Fake struct {
 	Created     map[string]string
 	// Bodies holds pull request bodies by number.
 	Bodies map[int]string
+	// PRByBranch maps a head branch to its open pull request.
+	PRByBranch map[string]int
 
 	// Merged records pull requests merged, in order.
 	Merged []int
@@ -40,6 +42,7 @@ func NewFake() *Fake {
 		Issues: map[int]*Issue{}, Comments: map[int][]string{},
 		LastSpoke: map[string]time.Time{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
+		PRByBranch: map[string]int{},
 	}
 }
 
@@ -260,4 +263,14 @@ func (f *Fake) UpdatePRBody(_ context.Context, number int, body string) error {
 	}
 	f.Bodies[number] = body
 	return nil
+}
+
+// PRForBranch implements Client.
+func (f *Fake) PRForBranch(_ context.Context, branch string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return 0, f.Err
+	}
+	return f.PRByBranch[branch], nil
 }

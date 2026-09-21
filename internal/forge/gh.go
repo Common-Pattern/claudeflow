@@ -450,3 +450,20 @@ func (g *GH) UpdatePRBody(ctx context.Context, number int, body string) error {
 	}
 	return nil
 }
+
+// PRForBranch implements Client.
+func (g *GH) PRForBranch(ctx context.Context, branch string) (int, error) {
+	raw, err := g.run(ctx, "pr", "list", "--repo", g.Repo, "--state", "open",
+		"--head", branch, "--json", "number", "--jq", "[.[].number]")
+	if err != nil {
+		return 0, err
+	}
+	var nums []int
+	if err := json.Unmarshal(raw, &nums); err != nil {
+		return 0, fmt.Errorf("decode pull requests for %s: %w", branch, err)
+	}
+	if len(nums) == 0 {
+		return 0, nil
+	}
+	return nums[0], nil
+}

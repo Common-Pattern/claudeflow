@@ -27,10 +27,29 @@ const (
 	KindReview Kind = "review"
 	// KindPlan is a conversation: no worktree, no slot, no code.
 	KindPlan Kind = "plan"
+	// KindFix repairs a pull request whose checks went red.
+	KindFix Kind = "fix"
+)
+
+// Phase is where a run has got to.
+//
+// A run outlives its agent process. Once a pull request is open the waiting is
+// claudeflow's job, not an agent's: polling costs nothing here and costs a slot
+// and a stream of tokens there, for a step that consists entirely of waiting.
+type Phase string
+
+const (
+	// PhaseRunning means an agent process is doing the work.
+	PhaseRunning Phase = "running"
+	// PhaseAwaitingCI means the agent is gone and a pull request is open.
+	// claudeflow watches its checks and decides what happens next.
+	PhaseAwaitingCI Phase = "awaiting-ci"
 )
 
 // Valid reports whether k is a known kind.
-func (k Kind) Valid() bool { return k == KindBuild || k == KindReview || k == KindPlan }
+func (k Kind) Valid() bool {
+	return k == KindBuild || k == KindReview || k == KindPlan || k == KindFix
+}
 
 // HoldsSlot reports whether a run of this kind occupies an environment slot.
 // Planning runs read the checkout in place and write nothing, so they hold
@@ -53,6 +72,23 @@ type Run struct {
 	Worktree string    `json:"worktree,omitempty"`
 	Log      string    `json:"log"`
 	Started  time.Time `json:"started"`
+
+	// Phase distinguishes a run with a live agent from one waiting on checks.
+	// Empty means PhaseRunning, so records written before this existed still
+	// read correctly.
+	Phase Phase `json:"phase,omitempty"`
+	// PR is the pull request this run opened, once there is one.
+	PR int `json:"pr,omitempty"`
+	// Attempts counts how many times an agent has been sent at failing checks.
+	Attempts int `json:"attempts,omitempty"`
+}
+
+// InPhase reports the run's phase, treating an empty value as running.
+func (r Run) InPhase(p Phase) bool {
+	if r.Phase == "" {
+		return p == PhaseRunning
+	}
+	return r.Phase == p
 }
 
 // ID is the stable key for a run, and the basename of its record.

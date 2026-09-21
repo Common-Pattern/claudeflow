@@ -35,6 +35,13 @@ type Config struct {
 	Hooks    Hooks    `yaml:"hooks"`
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
+
+	// RequiredChecks must be present and green before a pull request is
+	// merged. An absent check counts as not passed, which is what stops a
+	// merge landing before CI was scheduled at all.
+	//
+	// Empty means "every check the pull request reports, and at least one".
+	RequiredChecks []string `yaml:"requiredChecks"`
 }
 
 // Compose describes the environment stack a run gets.

@@ -123,7 +123,9 @@ func countLive(runs []state.Run) (builds, plans int) {
 func claimedSlots(runs []state.Run) []int {
 	var out []int
 	for _, r := range runs {
-		if r.Kind.HoldsSlot() {
+		// Slot zero means none held — a planning run, or one parked on its
+		// pull request with the environment already taken down.
+		if r.Kind.HoldsSlot() && r.Slot != 0 {
 			out = append(out, r.Slot)
 		}
 	}

@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 )
 
-//go:embed issue/SKILL.md review/SKILL.md planning/SKILL.md
+//go:embed issue/SKILL.md review/SKILL.md planning/SKILL.md fix/SKILL.md
 var embedded embed.FS
 
 // Name identifies one shipped skill.
@@ -32,10 +32,12 @@ const (
 	Review Name = "review"
 	// Planning is conversation only: no branch, no files.
 	Planning Name = "planning"
+	// Fix repairs a pull request whose checks went red.
+	Fix Name = "fix"
 )
 
 // All returns every shipped skill name.
-func All() []Name { return []Name{Issue, Review, Planning} }
+func All() []Name { return []Name{Issue, Review, Planning, Fix} }
 
 // Read returns a skill's markdown, preferring an override on disk.
 //
