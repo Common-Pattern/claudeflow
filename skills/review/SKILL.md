@@ -34,6 +34,20 @@ once CI is green.
 **Do not merge the standing pull request.** Integration into the base branch is
 the user's, always.
 
+## Sign every comment you post
+
+End every comment you write on an issue or pull request with this line, exactly:
+
+```
+<!-- claudeflow:agent -->
+```
+
+It is invisible in rendered Markdown and it is not optional. You post through
+the operator's own credentials, so your comments arrive authored by them, and
+this marker is the only thing that distinguishes your words from theirs. Without
+it the system reads your own answer as a fresh instruction from the user and
+starts another run — answering itself until someone notices.
+
 ## 1. Read every outstanding comment
 
 Three separate streams, and inline review comments are the ones most often
@@ -117,6 +131,12 @@ gh pr create --repo "$CLAUDEFLOW_REPO" --base "$CLAUDEFLOW_INTEGRATION" \
   --head "$CLAUDEFLOW_BRANCH" --title "Review fixes from #$CLAUDEFLOW_PR" --body-file <path>
 gh pr checks <pr> --repo "$CLAUDEFLOW_REPO" --watch --fail-fast --interval 30
 ```
+
+If any comment you acted on named an issue that this fix completes, put
+`Closes #<issue>` in the body. `claudeflow land` carries it onto the standing
+pull request as `Fixes #<issue>`, which is what closes the issue when the
+operator merges — a closing reference on a branch that merges into the
+integration branch closes nothing on its own.
 
 `gh pr checks` exits 0 without having watched your commit in two ways — only the
 fast deployment checks scheduled yet, or the previous commit's run. Confirm the

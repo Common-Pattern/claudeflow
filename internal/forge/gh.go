@@ -170,7 +170,7 @@ func intersect(want, have []string) []string {
 func (g *GH) Comment(ctx context.Context, number int, body string) error {
 	cmd := exec.CommandContext(ctx, g.bin(), "issue", "comment", strconv.Itoa(number),
 		"--repo", g.Repo, "--body-file", "-")
-	cmd.Stdin = strings.NewReader(body)
+	cmd.Stdin = strings.NewReader(SignComment(body))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -211,7 +211,10 @@ func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, use
 		return time.Time{}, fmt.Errorf("decode %s view: %w", verb, err)
 	}
 	for _, c := range append(view.Comments, view.Reviews...) {
-		if c.Author.Login == user {
+		// The agent posts through these same credentials, so its own comments
+		// arrive authored by the configured user. Only the marker separates
+		// them.
+		if c.Author.Login == user && !IsAgentComment(c.Body) {
 			note(c.at())
 		}
 	}
@@ -246,6 +249,7 @@ type ghViewComment struct {
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	Body        string     `json:"body"`
 	CreatedAt   *time.Time `json:"createdAt"`
 	SubmittedAt *time.Time `json:"submittedAt"`
 }
@@ -264,6 +268,7 @@ type ghComment struct {
 	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	Body      string     `json:"body"`
 	CreatedAt *time.Time `json:"created_at"`
 	// A review carries submitted_at and a null created_at, so reading only
 	// created_at silently misses every review the user left.
@@ -293,7 +298,7 @@ func latestBy(raw []byte, user string) (time.Time, error) {
 			return time.Time{}, fmt.Errorf("decode comments: %w", err)
 		}
 		for _, c := range page {
-			if c.User.Login != user {
+			if c.User.Login != user || IsAgentComment(c.Body) {
 				continue
 			}
 			if at := c.at(); at.After(latest) {
@@ -416,3 +421,32 @@ func prNumberFromURL(url string) (int, error) {
 }
 
 var _ Client = (*GH)(nil)
+
+// PRBody implements Client.
+func (g *GH) PRBody(ctx context.Context, number int) (string, error) {
+	raw, err := g.run(ctx, "pr", "view", strconv.Itoa(number), "--repo", g.Repo,
+		"--json", "body", "--jq", ".body")
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// UpdatePRBody implements Client.
+//
+// `gh pr edit` rather than the raw endpoint: it carries gh's own validation and
+// resolution. A failed edit has not happened — this returns the error rather
+// than assuming the body changed, because gh has been known to fail on an
+// unrelated GraphQL deprecation notice *before* mutating, which reads like
+// routine noise.
+func (g *GH) UpdatePRBody(ctx context.Context, number int, body string) error {
+	cmd := exec.CommandContext(ctx, g.bin(), "pr", "edit", strconv.Itoa(number),
+		"--repo", g.Repo, "--body-file", "-")
+	cmd.Stdin = strings.NewReader(body)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh pr edit %d: %s", number, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}

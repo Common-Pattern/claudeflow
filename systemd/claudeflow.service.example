@@ -1,0 +1,35 @@
+# claudeflow serve as a systemd --user unit.
+#
+# Copy to ~/.config/systemd/user/, adjust WorkingDirectory, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claudeflow
+#   loginctl enable-linger "$USER"    # survive logout
+#
+[Unit]
+Description=claudeflow — drive a coding agent from GitHub issue labels
+Documentation=https://github.com/Common-Pattern/claudeflow
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/path/to/your/checkout
+ExecStart=%h/.local/bin/claudeflow serve --interval 2m
+
+# A user unit gets the user manager's environment, not a login shell's. Name
+# every directory the tools actually live in. Where node is managed by a
+# version manager, point at its stable alias rather than a per-shell path.
+Environment=PATH=%h/.local/bin:%h/.local/share/fnm/aliases/default/bin:/usr/local/bin:/usr/bin:/bin
+
+# Runs must survive a restart of the supervisor.
+#
+# The default KillMode takes the whole cgroup, which would kill every agent
+# mid-run whenever this unit is restarted or stopped — including on an upgrade.
+# KillMode=process signals only claudeflow itself; runs are detached, record
+# their pid on disk, and are re-adopted by the next serve. That is what the
+# supervisor's own shutdown message promises.
+KillMode=process
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=default.target

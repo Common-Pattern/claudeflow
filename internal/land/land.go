@@ -69,6 +69,9 @@ type Result struct {
 	Resynced       bool
 	StandingPR     int
 	OpenedStanding bool
+	// Closes are the issues this landing will close, once the standing pull
+	// request is merged into the base branch.
+	Closes []int
 }
 
 // Land merges pr into the integration branch.
@@ -137,10 +140,20 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 		return res, fmt.Errorf("%w: %v", ErrChecksNotGreen, forge.Failed(checks))
 	}
 
+	// Read the closing references before merging, while the pull request is
+	// still the thing being talked about.
+	var closes []int
+	if body, err := l.Client.PRBody(ctx, pr); err == nil {
+		closes = forge.ClosingRefs(body)
+	} else {
+		l.logf("could not read the pull request body: %v", err)
+	}
+
 	l.logf("merging #%d at %s", pr, short(headSHA))
 	if err := l.Client.Merge(ctx, pr, headSHA); err != nil {
 		return res, fmt.Errorf("%w: %v", ErrMergeRefused, err)
 	}
+	res.Closes = closes
 
 	// The merge happened on the server, so nothing about it touched this
 	// machine. Without the next two steps the local checkout keeps serving
@@ -150,7 +163,7 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 		return res, err
 	}
 
-	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx)
+	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx, closes)
 	if err != nil {
 		// The merge already happened. A standing-pull-request problem is worth
 		// reporting but must not read as a failed merge.
@@ -188,13 +201,25 @@ func (l Lander) syncLocal(ctx context.Context) error {
 // Where CI runs on pull requests, a push to the integration branch is gated
 // only because that standing pull request makes it a push to some pull
 // request's head. If it lapses, the integration branch is silently ungated.
-func (l Lander) ensureStanding(ctx context.Context) (pr int, opened bool, err error) {
+func (l Lander) ensureStanding(ctx context.Context, closes []int) (pr int, opened bool, err error) {
 	if l.Cfg.Branches.SingleBranch() {
+		// With no separate integration branch the work merged straight into
+		// the base branch, so GitHub has already closed the issues itself.
 		return 0, false, nil
 	}
 	pr, err = l.Client.StandingPR(ctx, l.Cfg.Branches.Base, l.Cfg.Branches.Integration)
 	switch {
 	case err == nil:
+		// Carry the closing references forward. GitHub closes an issue only
+		// when a pull request merges into the default branch, so the `Closes
+		// #N` on the branch that just merged into the integration branch does
+		// nothing at all — without this the work ships and the issue stays
+		// open.
+		if len(closes) > 0 {
+			if err := l.addClosingRefs(ctx, pr, closes); err != nil {
+				l.logf("could not carry closing references onto #%d: %v", pr, err)
+			}
+		}
 		return pr, false, nil
 	case !errors.Is(err, forge.ErrNoStandingPR):
 		return 0, false, err
@@ -203,6 +228,7 @@ func (l Lander) ensureStanding(ctx context.Context) (pr int, opened bool, err er
 	title := fmt.Sprintf("%s → %s", l.Cfg.Branches.Integration, l.Cfg.Branches.Base)
 	body := fmt.Sprintf("Opened by claudeflow on %s to keep %s gated by CI.",
 		time.Now().UTC().Format(time.RFC3339), l.Cfg.Branches.Integration)
+	body = forge.WithClosingRefs(body, closes)
 	pr, err = l.Client.CreatePR(ctx, l.Cfg.Branches.Base, l.Cfg.Branches.Integration, title, body)
 	if err != nil {
 		// Identical branches is the ordinary case, not a fault: there is
@@ -238,4 +264,24 @@ func short(sha string) string {
 		return sha[:8]
 	}
 	return sha
+}
+
+// addClosingRefs merges refs into the standing pull request's closing block.
+//
+// Read-modify-write rather than append: several landings accumulate onto one
+// pull request, and each must preserve what the others put there.
+func (l Lander) addClosingRefs(ctx context.Context, pr int, refs []int) error {
+	body, err := l.Client.PRBody(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("read standing body: %w", err)
+	}
+	updated := forge.WithClosingRefs(body, refs)
+	if updated == body {
+		return nil
+	}
+	if err := l.Client.UpdatePRBody(ctx, pr, updated); err != nil {
+		return fmt.Errorf("update standing body: %w", err)
+	}
+	l.logf("standing pull request #%d now closes %v on merge", pr, forge.ClosingRefs(updated))
+	return nil
 }

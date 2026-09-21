@@ -35,6 +35,20 @@ worktree, where it will not collide with anyone.
 You may read anything: the code, the docs, git history, other issues. Reading is
 most of the job.
 
+## Sign every comment you post
+
+End every comment you write on an issue or pull request with this line, exactly:
+
+```
+<!-- claudeflow:agent -->
+```
+
+It is invisible in rendered Markdown and it is not optional. You post through
+the operator's own credentials, so your comments arrive authored by them, and
+this marker is the only thing that distinguishes your words from theirs. Without
+it the system reads your own answer as a fresh instruction from the user and
+starts another run — answering itself until someone notices.
+
 ## What you are for
 
 An issue arrives as a symptom or a wish. Implementation needs a decision. You

@@ -41,6 +41,20 @@ authorises nothing else. Do not merge the integration branch into the base
 branch. Do not touch any issue or branch other than this one. Do not push
 directly to the integration branch.
 
+## Sign every comment you post
+
+End every comment you write on an issue or pull request with this line, exactly:
+
+```
+<!-- claudeflow:agent -->
+```
+
+It is invisible in rendered Markdown and it is not optional. You post through
+the operator's own credentials, so your comments arrive authored by them, and
+this marker is the only thing that distinguishes your words from theirs. Without
+it the system reads your own answer as a fresh instruction from the user and
+starts another run — answering itself until someone notices.
+
 ## 1. Read the issue
 
 ```
@@ -147,8 +161,16 @@ gh pr create --repo "$CLAUDEFLOW_REPO" --base "$CLAUDEFLOW_INTEGRATION" \
 ```
 
 Not a draft — a draft cannot be merged, and this pull request is going to be.
-Body: what changed, how it was verified, `Closes #<issue>`, and any note from
-step 6.
+
+**The body must contain `Closes #<issue>`**, on its own line. It does not close
+anything by itself: GitHub closes an issue only when a pull request merges into
+the repository's *default* branch, and this one merges into the integration
+branch. `claudeflow land` reads that line and copies it onto the standing
+integration pull request as `Fixes #<issue>`, which is what actually closes the
+issue when the operator merges. Leave it out and the work ships while the issue
+stays open for someone to close by hand.
+
+Also include what changed, how it was verified, and any note from step 6.
 
 ## 8. Get CI green
 

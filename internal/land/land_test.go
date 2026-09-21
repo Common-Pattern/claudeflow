@@ -3,6 +3,7 @@ package land
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,4 +370,88 @@ func writeAndCommit(t *testing.T, dir, name, body string) {
 
 func writeFile(path, body string) error {
 	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+// GitHub closes an issue only when a pull request merges into the default
+// branch. The agent's pull request merges into the integration branch, so its
+// `Closes #N` does nothing — without carrying it forward the work ships and the
+// issue stays open.
+func TestLandCarriesClosingRefsToTheStandingPR(t *testing.T) {
+	w := newWorld(t)
+	f := forge.NewFake()
+	f.ChecksBy[7] = greenChecks()
+	f.Standing = []int{238}
+	f.Bodies[7] = "## Summary\n\nfixed the thing\n\nCloses #192"
+	f.Bodies[238] = "preview → main"
+
+	res, err := lander(w, f).Land(t.Context(), 7, w.worktree)
+	if err != nil {
+		t.Fatalf("Land: %v", err)
+	}
+	if len(res.Closes) != 1 || res.Closes[0] != 192 {
+		t.Errorf("Result.Closes = %v, want [192]", res.Closes)
+	}
+	if !strings.Contains(f.Bodies[238], "Fixes #192") {
+		t.Errorf("standing body = %q, want it to close #192 on merge", f.Bodies[238])
+	}
+	if !strings.Contains(f.Bodies[238], "preview → main") {
+		t.Error("the existing standing body was lost")
+	}
+}
+
+func TestLandAccumulatesClosingRefsAcrossLandings(t *testing.T) {
+	w := newWorld(t)
+	f := forge.NewFake()
+	f.Standing = []int{238}
+	f.Bodies[238] = "preview → main"
+
+	for _, tc := range []struct {
+		pr    int
+		issue int
+	}{{7, 192}, {8, 193}} {
+		f.ChecksBy[tc.pr] = greenChecks()
+		f.Bodies[tc.pr] = fmt.Sprintf("Closes #%d", tc.issue)
+		if _, err := lander(w, f).Land(t.Context(), tc.pr, w.worktree); err != nil {
+			t.Fatalf("Land #%d: %v", tc.pr, err)
+		}
+	}
+	refs := forge.ClosingRefs(f.Bodies[238])
+	if len(refs) != 2 || refs[0] != 192 || refs[1] != 193 {
+		t.Errorf("standing refs = %v, want [192 193]", refs)
+	}
+}
+
+func TestLandWithNoClosingRefLeavesTheStandingBodyAlone(t *testing.T) {
+	w := newWorld(t)
+	f := forge.NewFake()
+	f.ChecksBy[7] = greenChecks()
+	f.Standing = []int{238}
+	f.Bodies[7] = "## Summary\n\nno issue reference here"
+	f.Bodies[238] = "preview → main"
+
+	if _, err := lander(w, f).Land(t.Context(), 7, w.worktree); err != nil {
+		t.Fatalf("Land: %v", err)
+	}
+	if f.Bodies[238] != "preview → main" {
+		t.Errorf("standing body = %q, want it untouched", f.Bodies[238])
+	}
+}
+
+// A newly opened standing pull request must carry the references too.
+func TestLandOpensStandingPRWithClosingRefs(t *testing.T) {
+	w := newWorld(t)
+	f := forge.NewFake()
+	f.ChecksBy[7] = greenChecks()
+	f.Bodies[7] = "Closes #192"
+
+	res, err := lander(w, f).Land(t.Context(), 7, w.worktree)
+	if err != nil {
+		t.Fatalf("Land: %v", err)
+	}
+	if !res.OpenedStanding {
+		t.Fatal("no standing pull request was opened")
+	}
+	if !strings.Contains(f.Bodies[res.StandingPR], "Fixes #192") {
+		t.Errorf("new standing body = %q, want it to close #192", f.Bodies[res.StandingPR])
+	}
 }

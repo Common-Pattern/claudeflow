@@ -23,6 +23,8 @@ type Fake struct {
 	ChecksBy    map[int][]Check
 	HeadSHA     map[int]string
 	Created     map[string]string
+	// Bodies holds pull request bodies by number.
+	Bodies map[int]string
 
 	// Merged records pull requests merged, in order.
 	Merged []int
@@ -37,7 +39,7 @@ func NewFake() *Fake {
 	return &Fake{
 		Issues: map[int]*Issue{}, Comments: map[int][]string{},
 		LastSpoke: map[string]time.Time{}, ChecksBy: map[int][]Check{},
-		HeadSHA: map[int]string{}, Created: map[string]string{},
+		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
 	}
 }
 
@@ -221,7 +223,7 @@ func (f *Fake) Merge(_ context.Context, number int, wantSHA string) error {
 }
 
 // CreatePR implements Client.
-func (f *Fake) CreatePR(_ context.Context, _, _, title, _ string) (int, error) {
+func (f *Fake) CreatePR(_ context.Context, _, _, title, body string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.Err != nil {
@@ -229,8 +231,33 @@ func (f *Fake) CreatePR(_ context.Context, _, _, title, _ string) (int, error) {
 	}
 	n := 1000 + len(f.Issues)
 	f.Issues[n] = &Issue{Number: n, Title: title}
+	f.Bodies[n] = body
 	f.Standing = append(f.Standing, n)
 	return n, nil
 }
 
 var _ Client = (*Fake)(nil)
+
+// PRBody implements Client.
+func (f *Fake) PRBody(_ context.Context, number int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return "", f.Err
+	}
+	return f.Bodies[number], nil
+}
+
+// UpdatePRBody implements Client.
+func (f *Fake) UpdatePRBody(_ context.Context, number int, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return f.Err
+	}
+	if f.Bodies == nil {
+		f.Bodies = map[int]string{}
+	}
+	f.Bodies[number] = body
+	return nil
+}
