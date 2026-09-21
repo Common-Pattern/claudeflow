@@ -34,6 +34,20 @@ once CI is green.
 **Do not merge the standing pull request.** Integration into the base branch is
 the user's, always.
 
+## This run has no second turn
+
+You are a single non-interactive invocation. When you stop producing output,
+the run is over: nothing resumes you, no one reads a note you left for later,
+and every process in your group is killed with you.
+
+So **never start something long and then end your turn.** Not `verify` in the
+background, not a CI wait, not "I'll pick this up when it reports back" — there
+is no when. Block on it in the foreground, however long it takes. Your wall
+clock is generous precisely so that you can.
+
+If something genuinely cannot be waited on, that is a reason to stop and say so
+on the issue, not a reason to stop quietly and hope.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:

@@ -41,6 +41,20 @@ authorises nothing else. Do not merge the integration branch into the base
 branch. Do not touch any issue or branch other than this one. Do not push
 directly to the integration branch.
 
+## This run has no second turn
+
+You are a single non-interactive invocation. When you stop producing output,
+the run is over: nothing resumes you, no one reads a note you left for later,
+and every process in your group is killed with you.
+
+So **never start something long and then end your turn.** Not `verify` in the
+background, not a CI wait, not "I'll pick this up when it reports back" — there
+is no when. Block on it in the foreground, however long it takes. Your wall
+clock is generous precisely so that you can.
+
+If something genuinely cannot be waited on, that is a reason to stop and say so
+on the issue, not a reason to stop quietly and hope.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:
@@ -142,6 +156,9 @@ $CLAUDEFLOW_VERIFY
 
 Everything must pass. A run that lands red work costs more than one that stops.
 
+Run it in the foreground and wait for it. Backgrounding it and moving on ends
+the run with the result unknown — and unread, because nothing resumes you.
+
 ## 6. Exercise it
 
 If the change is user-facing, drive it and capture evidence — the project's
@@ -184,6 +201,9 @@ while the real suite is still queued, and it reports the *previous* commit's run
 when the new one is not scheduled yet. Before believing a green table, confirm
 the project's real checks are in `gh pr checks <pr> --json name,state`, and that
 the run's `headSha` is `git rev-parse HEAD`.
+
+`--watch` blocks, which is the point: stay in it until it returns. A run that
+stops here leaves a finished pull request that nobody merges.
 
 On red, read *which step* failed before reading anything into the job name. A
 failure in job setup means no project code ran, so it is never your diff.
