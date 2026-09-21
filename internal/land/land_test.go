@@ -76,7 +76,7 @@ func newWorld(t *testing.T) world {
 
 func cfg() config.Config {
 	c := config.Default()
-	c.Repo, c.User = "Common-Pattern/slotbooks", "sudhirj"
+	c.Repo, c.User = "acme/widgets", "alice"
 	c.Branches = config.Branches{Base: "main", Integration: "preview", Prefix: "claude/"}
 	return c
 }

@@ -19,7 +19,7 @@ func newWatcher(t *testing.T) (Watcher, *forge.Fake, *state.Store) {
 	}
 	f := forge.NewFake()
 	cfg := config.Default()
-	cfg.Repo, cfg.User = "Common-Pattern/slotbooks", "sudhirj"
+	cfg.Repo, cfg.User = "acme/widgets", "alice"
 	cfg.Branches = config.Branches{Base: "main", Integration: "preview", Prefix: "claude/"}
 	return Watcher{Client: f, Store: st, Cfg: cfg}, f, st
 }

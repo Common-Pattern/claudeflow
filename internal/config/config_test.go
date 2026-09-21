@@ -10,8 +10,8 @@ import (
 
 // Every project must ship a Compose file, so it is part of the minimum.
 const minimal = `
-repo: Common-Pattern/slotbooks
-user: sudhirj
+repo: acme/widgets
+user: alice
 compose:
   file: claudeflow/compose.yaml
 `
@@ -108,9 +108,9 @@ func TestValidate(t *testing.T) {
 		yaml    string
 		wantErr string
 	}{
-		{"missing repo", "user: sudhirj\n", "repo is required"},
-		{"malformed repo", "repo: slotbooks\nuser: sudhirj\n", "must be owner/name"},
-		{"repo with empty owner", "repo: /slotbooks\nuser: sudhirj\n", "must be owner/name"},
+		{"missing repo", "user: alice\n", "repo is required"},
+		{"malformed repo", "repo: widgets\nuser: alice\n", "must be owner/name"},
+		{"repo with empty owner", "repo: /widgets\nuser: alice\n", "must be owner/name"},
 		{"missing user", "repo: a/b\n", "user is required"},
 		{"empty label", minimal + "labels:\n  blocked: \"\"\n", "labels.blocked"},
 		{"duplicate labels", minimal + "labels:\n  landed: claude:blocked\n", "more than one state"},
@@ -139,8 +139,8 @@ func TestValidate(t *testing.T) {
 
 func TestValidAcceptsAFullConfig(t *testing.T) {
 	cfg, err := Parse([]byte(`
-repo: Common-Pattern/slotbooks
-user: sudhirj
+repo: acme/widgets
+user: alice
 branches:
   base: main
   integration: preview
@@ -162,7 +162,7 @@ hooks:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if cfg.Owner() != "Common-Pattern" || cfg.Name() != "slotbooks" {
+	if cfg.Owner() != "acme" || cfg.Name() != "widgets" {
 		t.Errorf("Owner/Name = %q/%q", cfg.Owner(), cfg.Name())
 	}
 	if cfg.SlotCount() != 6 {

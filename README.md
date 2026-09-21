@@ -2,8 +2,14 @@
 
 claudeflow drives a coding agent from GitHub issue labels. Label an issue, and
 it claims the issue, creates a git worktree, brings up an isolated environment
-the project defines, runs the agent CLI against the issue, opens a pull
-request, gets CI green, and merges the result into an integration branch.
+the project defines, and runs the agent CLI against the issue. The agent opens a
+pull request and stops there; claudeflow watches the checks, merges into the
+integration branch when they are green, and sends a fresh agent at the failure
+when they are not.
+
+That split is deliberate. Waiting on CI is ten or twenty minutes of an
+environment and a model session spent polling, and it is the step an agent is
+most likely to get wrong — ending its turn with the work finished and unmerged.
 
 It is a generic extraction of a system that has been running against a real
 product repository, not a demonstration. The orchestration — the state machine,
@@ -60,15 +66,19 @@ windows build: claudeflow manages POSIX process groups and shells out to `sh`.
 
 ## The label state machine
 
-One label carries the whole state of an issue. The label swap is the lock —
-there is no separate lease file, no database, and no coordination between
-processes beyond GitHub itself. A tick that crashes loses nothing, because the
-next tick reads the same labels back.
+Labels carry the whole state of an issue. There is no lease file, no database,
+and no coordination between processes beyond GitHub itself. A tick that crashes
+loses nothing, because the next tick reads the same labels back.
+
+`claude` marks membership and is **never removed**: the issue does not stop
+being the agent's while a run is on it. The other labels carry what is
+happening. An issue is ready to pick up when it has `claude`, nothing running,
+and no outcome.
 
 | Label | Meaning | Applied by |
 | --- | --- | --- |
-| `claude` | queued: work this issue | a human |
-| `claude:working` | claimed and running. Swapping `claude` for this label **is** the lock | claudeflow |
+| `claude` | this issue is the agent's. Applied once, never removed | a human |
+| `claude:working` | claimed and running. Adding this label **is** the lock | claudeflow |
 | `claude:landed` | merged into the integration branch | claudeflow |
 | `claude:question` | the agent asked something and is waiting for an answer | claudeflow |
 | `claude:blocked` | the run stopped on something it could not resolve | claudeflow |
@@ -98,20 +108,20 @@ than work that has not started.
 
 ## Configuration
 
-claudeflow reads one YAML file. Below is the worked case for the SlotBooks
-repository; every key not shown has a default.
+claudeflow reads one YAML file. Every key not shown has a default.
 
 ```yaml
 # The repository, in owner/name form. Everything runs against this one repo.
-repo: Common-Pattern/slotbooks
+repo: acme/widgets
 
 # The single account whose comments are instructions. Required, and there is no
-# default: without it the agent treats its own comments as instructions.
-user: sudhirj
+# default: the agent posts through this same account, so without it claudeflow
+# would read the agent's own comments as fresh instructions and answer itself.
+user: alice
 
 branches:
-  # Never touched by the agent. The integration branch eventually merges here,
-  # and a human does that merge.
+  # Never written to by the agent. The integration branch eventually merges
+  # here, and a human does that merge.
   base: main
   # Where the agent lands work, and what the operator tests. Set this equal to
   # `base` for a project with no staging branch; claudeflow then maintains no
@@ -133,7 +143,7 @@ limits:
   # of slots in the pool.
   maxBuilds: 2
   # Budgeted apart from builds: planning runs hold no slot and finish in
-  # minutes.
+  # minutes, so a reply should not queue behind two long builds.
   maxPlanning: 2
   buildTimeout: 150m
   planTimeout: 30m
@@ -141,24 +151,51 @@ limits:
   # capacity is shared with the operator's own sessions, so a run that retries
   # straight into a limit takes capacity from the person it is working for.
   rateLimitBackoff: 1h
-  # How many times a run may push a fix at failing CI before giving up and
-  # taking the blocked label.
+  # How many times an agent is sent at failing checks before the issue is
+  # blocked and the branch left for a human.
   fixAttempts: 3
 
 slots:
-  # Inclusive range. SlotBooks reserves lane 0 for the main stack, so the pool
-  # starts at 1.
+  # Inclusive range. Reserve low numbers for anything else on the machine that
+  # uses the same resources.
   min: 1
-  max: 6
-  # Run with CLAUDEFLOW_SLOT set. Exit 0 means the slot is busy. An error also
-  # counts as busy: allocating a slot whose state is unknown risks two
-  # environments on one port block, which is worse than waiting one tick.
-  busyCheck: test -S .lanes/$CLAUDEFLOW_SLOT/overmind.sock
+  max: 4
+
+# Required. The Compose file is the environment contract: claudeflow brings the
+# stack up before a run and takes it down after, under its own project name per
+# slot, so a teardown can only reach what that project owns.
+compose:
+  file: claudeflow/compose.yaml
+  # Per-slot project name: "<prefix>-<slot>". This is the namespacing.
+  projectPrefix: cf
+  # Bounds every compose command and kills the process group when it fires. A
+  # stuck provider must fail one run, not block the supervisor.
+  readyTimeout: 10m
+  # Name the implementation explicitly where the engine's default provider is
+  # not the one you want. Preferable to changing the engine's host-wide
+  # configuration, which everything else on the machine reads too.
+  # bin: [docker-compose]
+  # env:
+  #   DOCKER_HOST: unix:///run/user/1000/podman/podman.sock
+  # profiles: [spa]
+
+  # Services whose published port the run needs to reach. The Compose file can
+  # publish ephemerally; claudeflow reads back what each landed on and passes
+  # CLAUDEFLOW_PORT_<SERVICE>, CLAUDEFLOW_HOST_<SERVICE> and
+  # CLAUDEFLOW_URL_<SERVICE>. Nothing then does port arithmetic.
+  expose:
+    web: 3000
+    postgres: 5432
+  # What the agent should dial. Defaults to localhost; set it where a browser
+  # runs on another machine.
+  # host: dev.example.net
 
 hooks:
+  # Prepares a fresh worktree. Runs before the stack comes up, because a
+  # Compose file that bind-mounts the worktree needs its dependencies present.
   install: pnpm install --frozen-lockfile
-  envUp: ./scripts/lane.sh up $CLAUDEFLOW_SLOT
-  envDown: ./scripts/lane.sh down $CLAUDEFLOW_SLOT
+  # The project's full check suite, named here so the skills can refer to it
+  # without knowing the project.
   verify: pnpm verify:ci
 
 agent:
@@ -167,20 +204,53 @@ agent:
   # extraArgs: []
   # skillsDir: ./my-skills   # overrides the skills shipped in the binary
   autoUpdate: true
+  # Extra environment for the run, expanded against the addresses above. This
+  # is how a project points its own tooling at the run's containers. A test
+  # harness that refuses to guess its database — the correct behaviour — has
+  # nothing to be told without it, and the run can verify nothing.
+  env:
+    DATABASE_URL: postgresql://app:app@localhost:${CLAUDEFLOW_PORT_POSTGRES}/app_test
+
+# Checks that must be present and green before a merge. An absent check counts
+# as not passed, which is what stops a merge landing before CI was scheduled.
+# Empty means "every check the pull request reports, and at least one".
+requiredChecks:
+  - Unit Tests
+  - Lint
 
 paths:
   # The checkout runs are created from, and the one fast-forwarded after a
-  # merge. Relative paths resolve against the config file's directory.
-  root: /home/sj/github/common-pattern/slotbooks
+  # merge. Relative paths resolve against the config file's directory and are
+  # made absolute — a relative path is meaningless to a container bind mount.
+  root: .
   # Defaults to <root>/.claudeflow
   # state: /var/lib/claudeflow
   # Defaults to <state>/worktrees
   # worktrees: /var/lib/claudeflow/worktrees
 ```
 
+### The Compose file
+
+Every project ships one. claudeflow runs it per slot under `<projectPrefix>-<slot>`,
+which is what makes isolation structural rather than conventional: `down -v`
+can only reach containers, networks and volumes belonging to that project.
+
+It is interpolated with `CLAUDEFLOW_SLOT`, `CLAUDEFLOW_WORKTREE`,
+`CLAUDEFLOW_BRANCH` and `CLAUDEFLOW_PROJECT`, plus anything in `compose.env`.
+
+Two things worth knowing:
+
+- **Bind-mount the worktree at its own absolute path** if the containers are to
+  use dependencies installed on the host. Package managers that build trees of
+  symlinks resolve absolute links only when both sides agree on the path.
+- **claudeflow polls readiness itself** rather than passing `up --wait`, because
+  not every Compose implementation accepts that flag. A service with no
+  healthcheck counts as ready once running; one with a healthcheck must report
+  healthy.
+
 ### The hook contract
 
-Every hook runs through `sh -c` with these variables in its environment:
+Both hooks run through `sh -c` in the worktree, with these in the environment:
 
 | Variable | Value |
 | --- | --- |
@@ -189,33 +259,19 @@ Every hook runs through `sh -c` with these variables in its environment:
 | `CLAUDEFLOW_BRANCH` | the branch the run is working on |
 | `CLAUDEFLOW_ISSUE` | the issue number, or the pull request number for a review run |
 
-`busyCheck` receives `CLAUDEFLOW_SLOT` only — it is asked about a slot before
-any run owns it.
-
-Two requirements on `envDown`:
-
-- **It must be safe to run twice.** claudeflow calls it on the normal path and
-  again when reaping a run whose process died, and it cannot always tell which
-  happened.
-- **It must not destroy shared resources.** Slot environments are usually
-  global to the machine, so a teardown that prunes "everything unused" will
-  take out another slot's database or another checkout's containers. Scope the
-  teardown to `$CLAUDEFLOW_SLOT`.
-
-If `envUp` is set, `envDown` is required. Configuration without it is rejected
-at load, because it would leak one environment per run.
+There is no environment hook. Bringing the stack up and down is claudeflow's
+job through the Compose file — a shell hook could name any command, including
+one that reaches another run's resources.
 
 ### What a slot is
 
 A slot is an integer. What it means is the project's business: a port block and
-a database, a container set, a cloud namespace, a set of Kubernetes resources.
-claudeflow picks a number nothing else is using and passes it to the hooks; it
-has no idea what the hooks do with it.
+a database, a container set, a cloud namespace. claudeflow picks a number
+nothing else is using and hands it to the Compose file.
 
-`busyCheck` exists because slot resources are usually global to the machine
-rather than to one checkout. Another checkout, or a developer working by hand,
-can be holding a slot that claudeflow's own records know nothing about. Asking
-the machine is the only way to see that.
+Whether a slot is free is answered by asking Compose whether that project has
+containers, so there is nothing to configure — and it sees a stack another
+checkout left running, which claudeflow's own records cannot.
 
 ## Commands
 
@@ -229,6 +285,8 @@ the machine is the only way to see that.
 | `claudeflow pause` | stop dispatching new runs. Live runs continue |
 | `claudeflow resume` | undo `pause` |
 | `claudeflow stop` | stop live runs |
+| `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
+| `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
 | `claudeflow labels` | create or update the six labels in the repository. Run once per repo |
 | `claudeflow version` | version, commit and build date |
 
@@ -238,6 +296,7 @@ A first run:
 claudeflow labels          # create the label set in the repo
 gh issue edit 412 --add-label claude
 claudeflow once            # one tick, in the foreground
+                           # run it again to advance a run waiting on checks
 claudeflow status
 ```
 

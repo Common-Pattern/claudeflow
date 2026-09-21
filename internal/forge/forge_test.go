@@ -26,9 +26,9 @@ func TestIssueHasLabel(t *testing.T) {
 // silently misses every review the user left, which is the whole PR channel.
 func TestLatestByReadsReviewSubmittedAt(t *testing.T) {
 	raw := []byte(`[
-	  {"user":{"login":"sudhirj"},"created_at":null,"submitted_at":"2026-09-05T09:12:18Z"}
+	  {"user":{"login":"alice"},"created_at":null,"submitted_at":"2026-09-05T09:12:18Z"}
 	]`)
-	at, err := latestBy(raw, "sudhirj")
+	at, err := latestBy(raw, "alice")
 	if err != nil {
 		t.Fatalf("latestBy: %v", err)
 	}
@@ -42,9 +42,9 @@ func TestLatestByFiltersAuthor(t *testing.T) {
 	raw := []byte(`[
 	  {"user":{"login":"vercel[bot]"},"created_at":"2026-09-10T00:00:00Z"},
 	  {"user":{"login":"copilot-pull-request-reviewer[bot]"},"submitted_at":"2026-09-11T00:00:00Z"},
-	  {"user":{"login":"sudhirj"},"created_at":"2026-09-05T00:00:00Z"}
+	  {"user":{"login":"alice"},"created_at":"2026-09-05T00:00:00Z"}
 	]`)
-	at, err := latestBy(raw, "sudhirj")
+	at, err := latestBy(raw, "alice")
 	if err != nil {
 		t.Fatalf("latestBy: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestLatestByFiltersAuthor(t *testing.T) {
 
 func TestLatestByNoMatchingAuthor(t *testing.T) {
 	raw := []byte(`[{"user":{"login":"someone"},"created_at":"2026-09-05T00:00:00Z"}]`)
-	at, err := latestBy(raw, "sudhirj")
+	at, err := latestBy(raw, "alice")
 	if err != nil {
 		t.Fatalf("latestBy: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestPendingAndFailed(t *testing.T) {
 }
 
 func TestPRNumberFromURL(t *testing.T) {
-	n, err := prNumberFromURL("https://github.com/Common-Pattern/slotbooks/pull/238")
+	n, err := prNumberFromURL("https://github.com/acme/widgets/pull/238")
 	if err != nil {
 		t.Fatalf("prNumberFromURL: %v", err)
 	}

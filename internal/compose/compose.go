@@ -190,9 +190,11 @@ func (c Compose) Up(ctx context.Context) error {
 // Down stops the stack and removes its volumes.
 //
 // The volumes go because a run's database is disposable by design: the next
-// run on this project must not inherit rows the last one wrote. This is safe
-// in a way `lane.sh down --purge` was not, because a Compose project can only
-// reach resources it owns.
+// run on this project must not inherit rows the last one wrote.
+//
+// This is safe in a way a shell teardown is not. A script can name any
+// resource, so a teardown run from the wrong place can destroy another
+// checkout's data; a Compose project can only reach what it owns.
 func (c Compose) Down(ctx context.Context) error {
 	_, err := c.run(ctx, "down", "-v", "--remove-orphans")
 	return err

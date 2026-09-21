@@ -131,8 +131,8 @@ func TestStrandedReleaseOnlyRemovesWorking(t *testing.T) {
 func TestExpandAgentEnv(t *testing.T) {
 	resolved := map[string]string{
 		"CLAUDEFLOW_PORT_POSTGRES": "49153",
-		"CLAUDEFLOW_HOST_POSTGRES": "bigone.example.net",
-		"CLAUDEFLOW_URL_WEB":       "http://bigone.example.net:49154",
+		"CLAUDEFLOW_HOST_POSTGRES": "db.example.net",
+		"CLAUDEFLOW_URL_WEB":       "http://db.example.net:49154",
 	}
 	got := expandAgentEnv(map[string]string{
 		"DATABASE_URL": "postgresql://u:p@${CLAUDEFLOW_HOST_POSTGRES}:${CLAUDEFLOW_PORT_POSTGRES}/app_test",
@@ -140,7 +140,7 @@ func TestExpandAgentEnv(t *testing.T) {
 		"LITERAL":      "no placeholders here",
 	}, resolved)
 
-	if want := "postgresql://u:p@bigone.example.net:49153/app_test"; got["DATABASE_URL"] != want {
+	if want := "postgresql://u:p@db.example.net:49153/app_test"; got["DATABASE_URL"] != want {
 		t.Errorf("DATABASE_URL = %q, want %q", got["DATABASE_URL"], want)
 	}
 	if got["BASE_URL"] != resolved["CLAUDEFLOW_URL_WEB"] {

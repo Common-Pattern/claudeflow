@@ -11,8 +11,8 @@ import (
 // comment carries createdAt.
 func TestGhViewCommentShape(t *testing.T) {
 	raw := []byte(`{
-	  "comments": [{"author": {"login": "sudhirj"}, "createdAt": "2026-08-25T10:14:12Z"}],
-	  "reviews":  [{"author": {"login": "sudhirj"}, "submittedAt": "2026-09-05T09:12:18Z"}]
+	  "comments": [{"author": {"login": "alice"}, "createdAt": "2026-08-25T10:14:12Z"}],
+	  "reviews":  [{"author": {"login": "alice"}, "submittedAt": "2026-09-05T09:12:18Z"}]
 	}`)
 	var view struct {
 		Comments []ghViewComment `json:"comments"`
@@ -24,8 +24,8 @@ func TestGhViewCommentShape(t *testing.T) {
 	if len(view.Comments) != 1 || len(view.Reviews) != 1 {
 		t.Fatalf("decoded %d comments and %d reviews, want 1 each", len(view.Comments), len(view.Reviews))
 	}
-	if view.Comments[0].Author.Login != "sudhirj" {
-		t.Errorf("comment author = %q, want sudhirj", view.Comments[0].Author.Login)
+	if view.Comments[0].Author.Login != "alice" {
+		t.Errorf("comment author = %q, want alice", view.Comments[0].Author.Login)
 	}
 	wantComment := time.Date(2026, 8, 25, 10, 14, 12, 0, time.UTC)
 	if got := view.Comments[0].at(); !got.Equal(wantComment) {
@@ -59,7 +59,7 @@ func TestGhViewBotLoginsDoNotMatchAUser(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	for _, c := range view.Comments {
-		if c.Author.Login == "sudhirj" {
+		if c.Author.Login == "alice" {
 			t.Errorf("bot login %q matched the configured user", c.Author.Login)
 		}
 	}
