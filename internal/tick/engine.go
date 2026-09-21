@@ -124,12 +124,18 @@ func (e Engine) stack(n int) compose.Compose {
 // stackEnv is what the Compose file may interpolate. The slot is the knob a
 // project uses to offset published ports.
 func (e Engine) stackEnv(n int, worktree, branch string) map[string]string {
-	return map[string]string{
+	env := map[string]string{
 		"CLAUDEFLOW_SLOT":     strconv.Itoa(n),
 		"CLAUDEFLOW_WORKTREE": worktree,
 		"CLAUDEFLOW_BRANCH":   branch,
 		"CLAUDEFLOW_PROJECT":  e.Cfg.Compose.Project(n),
 	}
+	// The project's own additions last, so it can point the compose
+	// implementation at an engine without a host-wide setting.
+	for k, v := range e.Cfg.Compose.Env {
+		env[k] = v
+	}
+	return env
 }
 
 func (e Engine) allocator() slot.Allocator {

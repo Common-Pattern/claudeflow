@@ -54,7 +54,15 @@ type Compose struct {
 	ProjectPrefix string `yaml:"projectPrefix"`
 	// Bin overrides the compose command, already split, for a host where
 	// detection picks the wrong one.
+	//
+	// Naming an implementation here is preferable to configuring the container
+	// engine's default provider, which is a host-level setting shared by
+	// everything else on the machine — CI included. A tool should change its
+	// own behaviour, not the host's.
 	Bin []string `yaml:"bin"`
+	// Env is set on every compose invocation, for whatever the chosen
+	// implementation needs to find the engine.
+	Env map[string]string `yaml:"env"`
 	// ReadyTimeout bounds the wait for every service to become healthy.
 	ReadyTimeout time.Duration `yaml:"readyTimeout"`
 	// Expose maps a service name to the container port the agent should reach
