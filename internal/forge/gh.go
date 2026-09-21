@@ -180,29 +180,84 @@ func (g *GH) Comment(ctx context.Context, number int, body string) error {
 }
 
 // LatestCommentBy implements Client.
+//
+// Two of the three comment streams have a gh subcommand and are read through
+// it; only inline review comments have none, and that one call is the reason
+// `gh api` appears in this package at all. Subcommands carry gh's own field
+// resolution and stay correct across API versions, where a hand-built endpoint
+// path does not.
 func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, user string) (time.Time, error) {
-	endpoints := []string{fmt.Sprintf("repos/%s/issues/%d/comments", g.Repo, number)}
-	if target == TargetPR {
-		endpoints = append(endpoints,
-			fmt.Sprintf("repos/%s/pulls/%d/comments", g.Repo, number),
-			fmt.Sprintf("repos/%s/pulls/%d/reviews", g.Repo, number),
-		)
-	}
 	var latest time.Time
-	for _, ep := range endpoints {
-		raw, err := g.run(ctx, "api", "--paginate", ep)
-		if err != nil {
-			return time.Time{}, err
-		}
-		at, err := latestBy(raw, user)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("%s: %w", ep, err)
-		}
+	note := func(at time.Time) {
 		if at.After(latest) {
 			latest = at
 		}
 	}
+
+	verb := "issue"
+	fields := "comments"
+	if target == TargetPR {
+		verb, fields = "pr", "comments,reviews"
+	}
+	raw, err := g.run(ctx, verb, "view", strconv.Itoa(number), "--repo", g.Repo, "--json", fields)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var view struct {
+		Comments []ghViewComment `json:"comments"`
+		Reviews  []ghViewComment `json:"reviews"`
+	}
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return time.Time{}, fmt.Errorf("decode %s view: %w", verb, err)
+	}
+	for _, c := range append(view.Comments, view.Reviews...) {
+		if c.Author.Login == user {
+			note(c.at())
+		}
+	}
+
+	if target != TargetPR {
+		return latest, nil
+	}
+
+	// Inline review comments: no subcommand exposes these, so the raw endpoint
+	// is the escape hatch rather than a shortcut.
+	rawInline, err := g.run(ctx, "api", "--paginate",
+		fmt.Sprintf("repos/%s/pulls/%d/comments", g.Repo, number))
+	if err != nil {
+		return time.Time{}, err
+	}
+	at, err := latestBy(rawInline, user)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("inline review comments: %w", err)
+	}
+	note(at)
 	return latest, nil
+}
+
+// ghViewComment is the shape gh's own subcommands return, which differs from
+// the REST shape: the author is nested under "author" rather than "user", and
+// a review carries submittedAt where a comment carries createdAt.
+//
+// gh also normalises bot logins, reporting "vercel" where the REST API reports
+// "vercel[bot]". That does not affect matching a human's login, but it means
+// the two code paths below cannot share a filter.
+type ghViewComment struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	CreatedAt   *time.Time `json:"createdAt"`
+	SubmittedAt *time.Time `json:"submittedAt"`
+}
+
+func (c ghViewComment) at() time.Time {
+	if c.CreatedAt != nil && !c.CreatedAt.IsZero() {
+		return *c.CreatedAt
+	}
+	if c.SubmittedAt != nil {
+		return *c.SubmittedAt
+	}
+	return time.Time{}
 }
 
 type ghComment struct {
