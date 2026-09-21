@@ -242,3 +242,29 @@ func TestExplicitRelativePathsAreResolved(t *testing.T) {
 		t.Errorf("Paths.Worktrees = %q, want absolute", cfg.Paths.Worktrees)
 	}
 }
+
+// The queued label marks membership, not state: it is applied once and never
+// removed. Swapping it for the working label on every claim churned the
+// timeline for no information and made a running issue look un-owned.
+func TestIsQueued(t *testing.T) {
+	l := Default().Labels
+	for _, tc := range []struct {
+		name   string
+		labels []string
+		want   bool
+	}{
+		{"queued only", []string{l.Queued}, true},
+		{"queued with an unrelated label", []string{l.Queued, "bug"}, true},
+		{"queued and planning", []string{l.Queued, l.Planning}, true},
+		{"running", []string{l.Queued, l.Working}, false},
+		{"landed", []string{l.Queued, l.Landed}, false},
+		{"answered", []string{l.Queued, l.Question}, false},
+		{"blocked", []string{l.Queued, l.Blocked}, false},
+		{"not ours", []string{"bug"}, false},
+		{"nothing", nil, false},
+	} {
+		if got := l.IsQueued(tc.labels); got != tc.want {
+			t.Errorf("IsQueued(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

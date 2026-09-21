@@ -222,7 +222,7 @@ func (e Engine) releaseStrandedClaims(ctx context.Context) error {
 		}
 		e.logf("issue #%d: claimed with no run behind it; re-queueing", issue.Number)
 		if err := e.Client.EditLabels(ctx, issue.Number,
-			[]string{e.Cfg.Labels.Queued}, []string{e.Cfg.Labels.Working}); err != nil {
+			nil, []string{e.Cfg.Labels.Working}); err != nil {
 			e.logf("issue #%d: could not re-queue: %v", issue.Number, err)
 		}
 	}
@@ -259,7 +259,7 @@ func (e Engine) resolveAbandoned(ctx context.Context, r state.Run) error {
 		}
 		// Not the issue's fault and not a code problem: put it back in the
 		// queue rather than spending the operator's remaining capacity.
-		return e.Client.EditLabels(ctx, r.Ref, []string{e.Cfg.Labels.Queued}, []string{e.Cfg.Labels.Working})
+		return e.Client.EditLabels(ctx, r.Ref, nil, []string{e.Cfg.Labels.Working})
 	}
 
 	body := fmt.Sprintf("The unattended run exited without finishing.\n\n- Transcript: `%s`\n\nComment here, or re-apply `%s`, to try again.",
@@ -287,7 +287,11 @@ func (e Engine) hitUsageLimit(r state.Run) bool {
 // claimed with no record, and the next tick's Reap resolves it — the opposite
 // order would let two ticks start two runs on one issue.
 func (e Engine) Start(ctx context.Context, s Start) error {
-	if err := e.Client.EditLabels(ctx, s.Ref, []string{e.Cfg.Labels.Working}, []string{e.Cfg.Labels.Queued}); err != nil {
+	// Claiming ADDS the working label. The queued label stays: it says the
+	// issue is the agent's, which does not stop being true while a run is on
+	// it. Removing and restoring it on every transition churned the timeline
+	// and told a reader nothing.
+	if err := e.Client.EditLabels(ctx, s.Ref, []string{e.Cfg.Labels.Working}, e.Cfg.Labels.Resolution()); err != nil {
 		return fmt.Errorf("claim: %w", err)
 	}
 	// Record where the thread stands now, so a comment posted before the run

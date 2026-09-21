@@ -90,7 +90,13 @@ func (c Compose) Project(slot int) string {
 // Labels names the labels that carry the state machine. They are configurable
 // because label vocabulary is a house style, not a mechanism.
 type Labels struct {
-	// Queued is applied by a human and means "work this".
+	// Queued is applied by a human and means "this issue is the agent's".
+	//
+	// It is never removed. It marks membership, not state: the other labels
+	// carry what is happening. Swapping it for Working on every claim and back
+	// on every resolution produced constant churn on the issue's timeline for
+	// no information, and left an issue looking un-owned the moment a run
+	// started.
 	Queued string `yaml:"queued"`
 	// Working is the claim. Swapping Queued for Working is the lock.
 	Working string `yaml:"working"`
@@ -112,6 +118,28 @@ func (l Labels) All() []string {
 // Resolution returns the labels that end a run, which a re-queue must clear.
 func (l Labels) Resolution() []string {
 	return []string{l.Landed, l.Question, l.Blocked}
+}
+
+// IsQueued reports whether an issue is waiting to be worked: it belongs to the
+// agent, nothing is running on it, and it carries no outcome.
+func (l Labels) IsQueued(labels []string) bool {
+	has := func(name string) bool {
+		for _, x := range labels {
+			if x == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(l.Queued) || has(l.Working) {
+		return false
+	}
+	for _, r := range l.Resolution() {
+		if has(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // Branches names the two branches the workflow moves work between.

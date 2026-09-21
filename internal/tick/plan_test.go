@@ -227,11 +227,10 @@ func TestSplitQueued(t *testing.T) {
 	}
 	build, plan := SplitQueued(in, l)
 
-	if len(build) != 2 {
-		t.Fatalf("build = %v, want issues 1 and 5", refs(build))
-	}
-	if build[0].Number != 1 || build[1].Number != 5 {
-		t.Errorf("build refs = %v, want [1 5]", refs(build))
+	// Issue 5 carries an outcome label, so it is not queued even though the
+	// queued label is still on it — that label marks membership, not state.
+	if len(build) != 1 || build[0].Number != 1 {
+		t.Fatalf("build = %v, want only issue 1", refs(build))
 	}
 	if len(plan) != 1 || plan[0].Number != 2 {
 		t.Errorf("plan refs = %v, want [2]", refs(plan))

@@ -54,6 +54,7 @@ func (w Watcher) Requeue(ctx context.Context) ([]int, error) {
 		if !isNew || issue.HasLabel(l.Working) {
 			continue
 		}
+		// Clear the outcome; the queued label is already there and stays.
 		if err := w.Client.EditLabels(ctx, issue.Number, []string{l.Queued}, l.Resolution()); err != nil {
 			return nil, fmt.Errorf("re-queue #%d: %w", issue.Number, err)
 		}

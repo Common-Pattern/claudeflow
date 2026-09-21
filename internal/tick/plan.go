@@ -181,10 +181,9 @@ func DispatchBlocked(st *state.Store, now time.Time) error {
 // whose whole point was that it is not yet understood.
 func SplitQueued(issues []forge.Issue, l config.Labels) (build, plan []forge.Issue) {
 	for _, i := range issues {
-		if i.HasLabel(l.Working) {
-			continue
-		}
-		if !i.HasLabel(l.Queued) {
+		// Queued means: the agent's, nothing running, no outcome yet. The
+		// queued label alone is not enough now that it is never removed.
+		if !l.IsQueued(i.Labels) {
 			continue
 		}
 		if i.HasLabel(l.Planning) {
