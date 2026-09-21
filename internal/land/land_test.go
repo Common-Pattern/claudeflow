@@ -55,6 +55,13 @@ func newWorld(t *testing.T) world {
 
 	checkout := filepath.Join(root, "checkout")
 	run(t, root, "clone", origin, checkout)
+	// Landing merges through git.Repo, which inherits the process environment
+	// rather than this helper's. A machine with no git identity — a CI runner,
+	// a fresh container — then fails the merge with "Committer identity
+	// unknown". Configure the repository the way a real checkout is.
+	// Worktrees share this config, so setting it once covers them too.
+	run(t, checkout, "config", "user.email", "t@example.com")
+	run(t, checkout, "config", "user.name", "t")
 	run(t, checkout, "commit", "--allow-empty", "-m", "base")
 	run(t, checkout, "push", "-u", "origin", "preview")
 
@@ -237,8 +244,6 @@ func TestLandReportsChecksFailingAfterResync(t *testing.T) {
 func TestLandReportsAConflict(t *testing.T) {
 	w := newWorld(t)
 	// Both branches touch the same file differently.
-	run(t, w.checkout, "config", "user.email", "t@example.com")
-	run(t, w.checkout, "config", "user.name", "t")
 	writeAndCommit(t, w.checkout, "shared.txt", "integration side")
 	run(t, w.checkout, "push", "origin", "preview")
 	writeAndCommit(t, w.worktree, "shared.txt", "feature side")

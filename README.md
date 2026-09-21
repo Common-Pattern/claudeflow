@@ -28,11 +28,17 @@ enterprise host with no additional configuration. The consequence: whatever
 `gh auth status` reports is what claudeflow can do, and re-authenticating `gh`
 is how you fix a permissions failure.
 
+**`git` needs a committer identity.** Landing creates a merge commit, so a host
+without `user.name` and `user.email` fails with `Committer identity unknown`
+part-way through a run — after the agent has done all the work. A fresh
+container or CI runner is the usual place this bites.
+
 Check before first run:
 
 ```sh
 gh auth status
 git --version
+git config user.email   # must print something
 claude --version
 ```
 
