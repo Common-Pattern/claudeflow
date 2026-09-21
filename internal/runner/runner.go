@@ -155,11 +155,20 @@ func Start(ctx context.Context, s Spawn) (*Process, error) {
 		if err != nil {
 			return nil, err
 		}
-		// One mutex across both streams: they share a file descriptor, and
-		// unserialised writes interleave mid-line.
-		shared := &lockedWriter{w: f, mu: new(sync.Mutex)}
-		outw = io.MultiWriter(stdout, shared)
-		errw = io.MultiWriter(stderr, shared)
+		// Hand the child the *os.File itself, not a wrapper.
+		//
+		// os/exec only passes a descriptor straight through when Stdout is an
+		// *os.File. Given any other io.Writer it creates a pipe and copies from
+		// it in a goroutine belonging to THIS process — so a supervisor that
+		// exits after starting a detached run takes the copier with it, and
+		// every byte the child writes afterwards goes nowhere. The symptom is a
+		// run that plainly worked against a transcript of zero bytes, which
+		// also blinds the usage-limit check that reads it.
+		//
+		// The cost is that Result.Stdout and Result.Stderr stay empty for a
+		// run started this way. That is the right trade: a detached run's
+		// output belongs in the file, and callers read it from there.
+		outw, errw = f, f
 		logs = f
 	}
 

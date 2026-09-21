@@ -8,9 +8,12 @@ import (
 	"time"
 )
 
+// Every project must ship a Compose file, so it is part of the minimum.
 const minimal = `
 repo: Common-Pattern/slotbooks
 user: sudhirj
+compose:
+  file: claudeflow/compose.yaml
 `
 
 func TestParseAppliesDefaults(t *testing.T) {
@@ -115,7 +118,8 @@ func TestValidate(t *testing.T) {
 		{"negative slot", minimal + "slots:\n  min: -1\n  max: 2\n", "must not be negative"},
 		{"builds exceed slots", minimal + "slots:\n  min: 1\n  max: 2\nlimits:\n  maxBuilds: 9\n", "available slots"},
 		{"zero timeout", minimal + "limits:\n  planTimeout: 0s\n", "timeouts must be positive"},
-		{"envUp without envDown", minimal + "hooks:\n  envUp: ./up.sh\n", "without hooks.envDown"},
+		{"no compose file", "repo: a/b\nuser: u\n", "compose.file is required"},
+		{"zero ready timeout", "repo: a/b\nuser: u\ncompose:\n  file: c.yaml\n  readyTimeout: 0s\n", "compose.readyTimeout"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,11 +151,12 @@ limits:
 slots:
   min: 1
   max: 6
-  busyCheck: test -S .lanes/$CLAUDEFLOW_SLOT/overmind.sock
+compose:
+  file: claudeflow/compose.yaml
+  projectPrefix: cf
+  profiles: [spa]
 hooks:
   install: pnpm install --frozen-lockfile
-  envUp: ./scripts/lane.sh up $CLAUDEFLOW_SLOT
-  envDown: ./scripts/lane.sh down $CLAUDEFLOW_SLOT
   verify: pnpm verify:ci
 `), "/checkout")
 	if err != nil {
@@ -165,6 +170,24 @@ hooks:
 	}
 	if cfg.Branches.SingleBranch() {
 		t.Error("SingleBranch() = true, want false when integration differs from base")
+	}
+	if got := cfg.Compose.Project(3); got != "cf-3" {
+		t.Errorf("Compose.Project(3) = %q, want cf-3", got)
+	}
+}
+
+// Each slot is its own Compose project; that naming is what makes a teardown
+// unable to reach another run's resources.
+func TestComposeProjectNaming(t *testing.T) {
+	if got := (Compose{}).Project(2); got != "cf-2" {
+		t.Errorf("default prefix: Project(2) = %q, want cf-2", got)
+	}
+	if got := (Compose{ProjectPrefix: "sb"}).Project(5); got != "sb-5" {
+		t.Errorf("Project(5) = %q, want sb-5", got)
+	}
+	a, b := (Compose{}).Project(1), (Compose{}).Project(2)
+	if a == b {
+		t.Error("two slots produced the same project name")
 	}
 }
 

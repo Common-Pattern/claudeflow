@@ -31,9 +31,60 @@ type Config struct {
 	Branches Branches `yaml:"branches"`
 	Limits   Limits   `yaml:"limits"`
 	Slots    Slots    `yaml:"slots"`
+	Compose  Compose  `yaml:"compose"`
 	Hooks    Hooks    `yaml:"hooks"`
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
+}
+
+// Compose describes the environment stack a run gets.
+//
+// Every project must ship a Compose file. That is the environment contract:
+// claudeflow brings the stack up before a run and takes it down afterwards,
+// and each slot is its own Compose project, so isolation is namespacing rather
+// than convention. It replaced a pair of shell hooks, which could name any
+// command and so could also reach resources belonging to another run — the way
+// a teardown script once destroyed a different checkout's database.
+type Compose struct {
+	// File is the Compose file, relative to Paths.Root.
+	File string `yaml:"file"`
+	// Profiles are Compose profiles to enable for every run.
+	Profiles []string `yaml:"profiles"`
+	// ProjectPrefix names the per-slot Compose projects: "<prefix>-<slot>".
+	ProjectPrefix string `yaml:"projectPrefix"`
+	// Bin overrides the compose command, already split, for a host where
+	// detection picks the wrong one.
+	Bin []string `yaml:"bin"`
+	// ReadyTimeout bounds the wait for every service to become healthy.
+	ReadyTimeout time.Duration `yaml:"readyTimeout"`
+	// Expose maps a service name to the container port the agent should reach
+	// it on. After the stack is ready, claudeflow asks Compose which host port
+	// each landed on and passes it as CLAUDEFLOW_URL_<SERVICE>.
+	//
+	// This is what lets a Compose file publish ephemeral ports. Nothing then
+	// does port arithmetic, and a run cannot collide with another run, with a
+	// developer's own stack, or with anything else on the host.
+	Expose map[string]int `yaml:"expose"`
+	// Host is what the agent should dial. Defaults to localhost; set it to a
+	// reachable hostname where a browser runs elsewhere.
+	Host string `yaml:"host"`
+}
+
+// URLHost returns the hostname to build service URLs from.
+func (c Compose) URLHost() string {
+	if c.Host == "" {
+		return "localhost"
+	}
+	return c.Host
+}
+
+// Project returns the Compose project name for a slot.
+func (c Compose) Project(slot int) string {
+	prefix := c.ProjectPrefix
+	if prefix == "" {
+		prefix = "cf"
+	}
+	return fmt.Sprintf("%s-%d", prefix, slot)
 }
 
 // Labels names the labels that carry the state machine. They are configurable
@@ -109,31 +160,27 @@ type Limits struct {
 // hands it to the hooks.
 type Slots struct {
 	// Min and Max bound the allocatable range, inclusive. A project that
-	// reserves slot 0 for its main stack sets Min to 1.
+	// reserves slot 0 for a stack of its own sets Min to 1.
+	//
+	// A slot is now only a number handed to the Compose file, which typically
+	// uses it to offset published ports. Whether a slot is free is answered by
+	// asking Compose whether that project has containers, so there is nothing
+	// to configure.
 	Min int `yaml:"min"`
 	Max int `yaml:"max"`
-
-	// BusyCheck is run with CLAUDEFLOW_SLOT set and decides whether a slot is
-	// in use by anything at all, including work claudeflow did not start.
-	// Exit 0 means busy.
-	//
-	// This exists because slot resources are usually global to the machine
-	// rather than to one checkout, so claudeflow's own bookkeeping cannot see
-	// another checkout's environment occupying the slot.
-	BusyCheck string `yaml:"busyCheck"`
 }
 
-// Hooks are the project-owned commands that make a checkout workable. Each runs
-// with CLAUDEFLOW_SLOT, CLAUDEFLOW_WORKTREE, CLAUDEFLOW_BRANCH and
+// Hooks are the two project-owned commands that remain. Each runs in the
+// worktree with CLAUDEFLOW_SLOT, CLAUDEFLOW_WORKTREE, CLAUDEFLOW_BRANCH and
 // CLAUDEFLOW_ISSUE in the environment.
+//
+// Environment setup is not here: that is the Compose file's job. These two are
+// what runs against the checkout itself rather than against the stack.
 type Hooks struct {
-	// Install prepares a fresh worktree, typically a dependency install.
+	// Install prepares a fresh worktree, typically a dependency install. It
+	// runs before the stack comes up, because a Compose file that bind-mounts
+	// the worktree needs its dependencies already in place.
 	Install string `yaml:"install"`
-	// EnvUp brings the slot's environment up and seeds it.
-	EnvUp string `yaml:"envUp"`
-	// EnvDown tears it down. It must be safe to run twice and must not destroy
-	// shared resources.
-	EnvDown string `yaml:"envDown"`
 	// Verify is the project's full check suite, named here so the skills can
 	// refer to it without knowing the project.
 	Verify string `yaml:"verify"`
@@ -193,8 +240,9 @@ func Default() Config {
 			RateLimitBackoff: time.Hour,
 			FixAttempts:      3,
 		},
-		Slots: Slots{Min: 1, Max: 4},
-		Agent: Agent{Command: "claude", Model: "opus", AutoUpdate: true},
+		Slots:   Slots{Min: 1, Max: 4},
+		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
+		Agent:   Agent{Command: "claude", Model: "opus", AutoUpdate: true},
 	}
 }
 
@@ -284,8 +332,11 @@ func (c Config) Validate() error {
 	if c.Limits.BuildTimeout <= 0 || c.Limits.PlanTimeout <= 0 {
 		return fmt.Errorf("%w: timeouts must be positive", ErrInvalid)
 	}
-	if c.Hooks.EnvUp != "" && c.Hooks.EnvDown == "" {
-		return fmt.Errorf("%w: hooks.envUp is set without hooks.envDown, which would leak an environment per run", ErrInvalid)
+	if c.Compose.File == "" {
+		return fmt.Errorf("%w: compose.file is required — every project must ship a Compose file describing its environment", ErrInvalid)
+	}
+	if c.Compose.ReadyTimeout <= 0 {
+		return fmt.Errorf("%w: compose.readyTimeout must be positive", ErrInvalid)
 	}
 	if c.Paths.Root == "" {
 		return fmt.Errorf("%w: paths.root is required", ErrInvalid)

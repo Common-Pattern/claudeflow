@@ -18,6 +18,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
@@ -150,6 +151,18 @@ func engine(cfg config.Config, st *state.Store) tick.Engine {
 		Store:  st,
 		Repo:   git.New(cfg.Paths.Root),
 		Log:    logf,
+	}
+}
+
+// stackFor returns the Compose stack for a slot. Each slot is its own Compose
+// project, so a teardown can only reach what that project owns.
+func stackFor(cfg config.Config, slot int) compose.Compose {
+	return compose.Compose{
+		Bin:     cfg.Compose.Bin,
+		File:    cfg.Compose.File,
+		Project: cfg.Compose.Project(slot),
+		Dir:     cfg.Paths.Root,
+		Env:     map[string]string{"CLAUDEFLOW_SLOT": strconv.Itoa(slot)},
 	}
 }
 
@@ -343,14 +356,8 @@ func runHousekeep(ctx context.Context, cfg config.Config, st *state.Store, args 
 		LogRetention: *retain,
 		DryRun:       *dry,
 		Log:          logf,
-		RunHook: func(ctx context.Context, cmd string, slot int, worktree string) error {
-			r := runner.Runner{
-				Dir:     worktree,
-				Env:     runner.Env{"CLAUDEFLOW_SLOT": strconv.Itoa(slot), "CLAUDEFLOW_WORKTREE": worktree},
-				Timeout: 10 * time.Minute,
-			}
-			_, err := r.Exec(ctx, cmd)
-			return err
+		Teardown: func(ctx context.Context, slot int) error {
+			return stackFor(cfg, slot).Down(ctx)
 		},
 	}
 	rep, err := k.Run(ctx)

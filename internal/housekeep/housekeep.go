@@ -23,8 +23,12 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/state"
 )
 
-// HookFunc runs a project hook for a slot.
-type HookFunc func(ctx context.Context, command string, slot int, worktree string) error
+// TeardownFunc takes a slot's environment down.
+//
+// Reaping normally does this when a run ends. It is repeated here because a
+// supervisor that was killed rather than shut down never reaped, and the
+// stack it left behind would hold the slot indefinitely.
+type TeardownFunc func(ctx context.Context, slot int) error
 
 // AliveFunc reports whether a recorded run is still going.
 type AliveFunc func(pid int) bool
@@ -34,9 +38,9 @@ type Keeper struct {
 	Cfg   config.Config
 	Repo  *git.Repo
 	Store *state.Store
-	// RunHook tears an environment down before its worktree is removed.
+	// Teardown removes a slot's environment before its worktree is removed.
 	// Optional; without it environments are left alone.
-	RunHook HookFunc
+	Teardown TeardownFunc
 	// Alive decides whether a run record still has a process behind it.
 	Alive AliveFunc
 	// LogRetention is how long transcripts are kept. Zero means forever.
@@ -140,10 +144,10 @@ func (k Keeper) reclaim(ctx context.Context, wt git.Worktree) error {
 		return nil
 	}
 
-	if k.RunHook != nil && k.Cfg.Hooks.EnvDown != "" {
+	if k.Teardown != nil {
 		if slot, ok := slotOfWorktree(wt.Path); ok {
-			if err := k.RunHook(ctx, k.Cfg.Hooks.EnvDown, slot, wt.Path); err != nil {
-				k.logf("teardown hook for %s reported a problem: %v", wt.Path, err)
+			if err := k.Teardown(ctx, slot); err != nil {
+				k.logf("teardown for slot %d reported a problem: %v", slot, err)
 			}
 		}
 	}

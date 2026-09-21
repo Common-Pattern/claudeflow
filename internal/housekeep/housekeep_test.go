@@ -179,10 +179,10 @@ func TestRunsTeardownBeforeRemoval(t *testing.T) {
 
 	var sawSlot int
 	var existedAtTeardown bool
-	e.keeper.Cfg.Hooks.EnvDown = "true"
-	e.keeper.RunHook = func(_ context.Context, _ string, slot int, wt string) error {
+	teardownPath := path
+	e.keeper.Teardown = func(_ context.Context, slot int) error {
 		sawSlot = slot
-		_, err := os.Stat(wt)
+		_, err := os.Stat(teardownPath)
 		existedAtTeardown = err == nil
 		return nil
 	}
@@ -205,8 +205,7 @@ func TestRunsTeardownBeforeRemoval(t *testing.T) {
 func TestTeardownFailureStillReclaims(t *testing.T) {
 	e := newEnv(t)
 	e.addWorktree(t, "build-5-slot1", "claude/issue-5", true)
-	e.keeper.Cfg.Hooks.EnvDown = "false"
-	e.keeper.RunHook = func(context.Context, string, int, string) error {
+	e.keeper.Teardown = func(context.Context, int) error {
 		return context.DeadlineExceeded
 	}
 

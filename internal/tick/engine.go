@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
@@ -102,24 +104,41 @@ func (e Engine) Once(ctx context.Context) error {
 	return nil
 }
 
-func (e Engine) allocator() slot.Allocator {
-	a := slot.Allocator{Min: e.Cfg.Slots.Min, Max: e.Cfg.Slots.Max}
-	if e.Cfg.Slots.BusyCheck != "" {
-		a.Busy = func(ctx context.Context, n int) (bool, error) {
-			r := runner.Runner{
-				Dir:     e.Cfg.Paths.Root,
-				Env:     runner.Env{"CLAUDEFLOW_SLOT": strconv.Itoa(n)},
-				Timeout: 30 * time.Second,
-			}
-			res, err := r.Exec(ctx, e.Cfg.Slots.BusyCheck)
-			if err != nil {
-				return false, err
-			}
-			// Exit 0 means busy, following the convention of test(1).
-			return res.ExitCode == 0, nil
-		}
+// stack returns the Compose stack for a slot. Each slot is its own Compose
+// project, which is what makes isolation structural: a teardown can only reach
+// resources its own project owns.
+func (e Engine) stack(n int) compose.Compose {
+	return compose.Compose{
+		Bin:      e.Cfg.Compose.Bin,
+		File:     e.Cfg.Compose.File,
+		Project:  e.Cfg.Compose.Project(n),
+		Dir:      e.Cfg.Paths.Root,
+		Profiles: e.Cfg.Compose.Profiles,
+		Env:      e.stackEnv(n, "", ""),
 	}
-	return a
+}
+
+// stackEnv is what the Compose file may interpolate. The slot is the knob a
+// project uses to offset published ports.
+func (e Engine) stackEnv(n int, worktree, branch string) map[string]string {
+	return map[string]string{
+		"CLAUDEFLOW_SLOT":     strconv.Itoa(n),
+		"CLAUDEFLOW_WORKTREE": worktree,
+		"CLAUDEFLOW_BRANCH":   branch,
+		"CLAUDEFLOW_PROJECT":  e.Cfg.Compose.Project(n),
+	}
+}
+
+func (e Engine) allocator() slot.Allocator {
+	return slot.Allocator{
+		Min: e.Cfg.Slots.Min, Max: e.Cfg.Slots.Max,
+		// A slot is busy when its Compose project has containers. That covers
+		// a stack another checkout left up, which claudeflow's own records
+		// cannot see, and needs nothing configured.
+		Busy: func(ctx context.Context, n int) (bool, error) {
+			return e.stack(n).Running(ctx)
+		},
+	}
 }
 
 // liveRuns returns run records whose process is still going, reaping is left
@@ -155,8 +174,9 @@ func (e Engine) Reap(ctx context.Context) error {
 				e.logf("%s: %v", r.ID(), err)
 			}
 		}
-		if r.Kind.HoldsSlot() && e.Cfg.Hooks.EnvDown != "" {
-			if err := e.hook(ctx, e.Cfg.Hooks.EnvDown, r.Slot, r.Worktree, r.Ref, r.Branch); err != nil {
+		if r.Kind.HoldsSlot() {
+			e.logf("%s: taking the stack down on slot %d", r.ID(), r.Slot)
+			if err := e.stack(r.Slot).Down(ctx); err != nil {
 				e.logf("%s: teardown reported a problem: %v", r.ID(), err)
 			}
 		}
@@ -253,11 +273,25 @@ func (e Engine) Start(ctx context.Context, s Start) error {
 		dir = e.Cfg.Paths.Root
 	}
 
-	proc, err := runner.Start(ctx, runner.Spawn{
+	// The run outlives the tick that started it. context.WithoutCancel keeps
+	// deadlines and values while dropping cancellation, so a supervisor that
+	// exits — `claudeflow once` returning, or serve taking a SIGTERM — does not
+	// take its children with it.
+	//
+	// Without this, `once` killed the agent microseconds after spawning it: the
+	// signal context is cancelled by main's deferred stop() as the command
+	// returns, and the run died having written nothing at all. A run is bounded
+	// by its own Timeout, not by how long the supervisor happens to live.
+	args, err := e.agentArgs(s)
+	if err != nil {
+		return err
+	}
+
+	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
 		Command: e.Cfg.Agent.Command,
-		Args:    e.agentArgs(s),
+		Args:    args,
 		Dir:     dir,
-		Env:     e.runEnv(s, run),
+		Env:     e.runEnv(ctx, s, run),
 		Timeout: timeout,
 		LogPath: run.Log,
 	})
@@ -293,26 +327,65 @@ func (e Engine) prepare(ctx context.Context, s Start, logPath string) (branch, w
 			return "", "", fmt.Errorf("create worktree: %w", err)
 		}
 	}
-	if err := skills.Install(filepath.Join(worktree, ".claude", "skills"), e.Cfg.Agent.SkillsDir); err != nil {
-		return "", "", fmt.Errorf("install skills: %w", err)
+	// Install runs before the stack comes up: a Compose file that bind-mounts
+	// the worktree needs its dependencies already in place.
+	if e.Cfg.Hooks.Install != "" {
+		e.logf("%s-%d: running the install hook", s.Kind, s.Ref)
+		if err := e.hookLogged(ctx, e.Cfg.Hooks.Install, s.Slot, worktree, s.Ref, branch, logPath); err != nil {
+			return "", "", fmt.Errorf("install hook: %w", err)
+		}
 	}
-	for _, h := range []struct{ name, cmd string }{
-		{"install", e.Cfg.Hooks.Install},
-		{"envUp", e.Cfg.Hooks.EnvUp},
-	} {
-		if h.cmd == "" {
-			continue
+
+	st := e.stack(s.Slot)
+	st.Env = e.stackEnv(s.Slot, worktree, branch)
+
+	// Take down whatever the slot's project is holding first. A previous run
+	// that was killed rather than reaped leaves containers behind, and Up
+	// against them starts nothing.
+	if err := st.Down(ctx); err != nil {
+		e.logf("%s-%d: pre-emptive teardown: %v", s.Kind, s.Ref, err)
+	}
+
+	e.logf("%s-%d: bringing the stack up on slot %d (project %s)", s.Kind, s.Ref, s.Slot, st.Project)
+	if err := st.Up(ctx); err != nil {
+		return "", "", fmt.Errorf("compose up: %w", err)
+	}
+	if err := st.WaitReady(ctx, e.Cfg.Compose.ReadyTimeout, 2*time.Second); err != nil {
+		// Leave nothing half-up holding the slot.
+		if derr := st.Down(ctx); derr != nil {
+			e.logf("%s-%d: teardown after a failed start: %v", s.Kind, s.Ref, derr)
 		}
-		e.logf("%s-%d: running the %s hook", s.Kind, s.Ref, h.name)
-		if err := e.hookLogged(ctx, h.cmd, s.Slot, worktree, s.Ref, branch, logPath); err != nil {
-			return "", "", fmt.Errorf("%s hook: %w", h.name, err)
-		}
+		return "", "", fmt.Errorf("stack did not become ready: %w", err)
 	}
 	return branch, worktree, nil
 }
 
-func (e Engine) hook(ctx context.Context, cmd string, slot int, worktree string, ref int, branch string) error {
-	return e.hookLogged(ctx, cmd, slot, worktree, ref, branch, "")
+// serviceURLs asks Compose which host port each exposed service landed on.
+//
+// The Compose file publishes ephemeral ports, so this is the only way to know
+// them — and the reason nothing in this system does port arithmetic.
+func (e Engine) serviceURLs(ctx context.Context, n int) map[string]string {
+	out := map[string]string{}
+	if len(e.Cfg.Compose.Expose) == 0 {
+		return out
+	}
+	st := e.stack(n)
+	for service, port := range e.Cfg.Compose.Expose {
+		addr, err := st.Port(ctx, service, port)
+		if err != nil || addr == "" {
+			e.logf("could not resolve the published port for %s: %v", service, err)
+			continue
+		}
+		// Compose reports "0.0.0.0:49153"; the host half is not dialable from
+		// elsewhere, so keep the port and substitute the configured host.
+		hostPort := addr
+		if i := strings.LastIndex(addr, ":"); i >= 0 {
+			hostPort = addr[i+1:]
+		}
+		key := "CLAUDEFLOW_URL_" + strings.ToUpper(strings.ReplaceAll(service, "-", "_"))
+		out[key] = fmt.Sprintf("http://%s:%s", e.Cfg.Compose.URLHost(), hostPort)
+	}
+	return out
 }
 
 func (e Engine) hookLogged(ctx context.Context, cmd string, slot int, worktree string, ref int, branch, logPath string) error {
@@ -341,29 +414,48 @@ func (e Engine) hookLogged(ctx context.Context, cmd string, slot int, worktree s
 	return nil
 }
 
-func (e Engine) agentArgs(s Start) []string {
-	skill := map[state.Kind]string{
-		state.KindBuild:  "claudeflow-issue",
-		state.KindReview: "claudeflow-review",
-		state.KindPlan:   "claudeflow-planning",
+// agentArgs builds the agent invocation.
+//
+// The run's instructions go in as --append-system-prompt rather than as a skill
+// the agent is asked to look up. Three reasons, and the first is the one that
+// bit: a planning run has no worktree, so there is nowhere to install a skill
+// file, and it would have been told to invoke something that does not exist.
+// Second, installing skills means writing into the project's checkout, which
+// shows up in its git status. Third, the embedded copy is then exactly what
+// runs, so a skill cannot drift from the binary that depends on its wording.
+func (e Engine) agentArgs(s Start) ([]string, error) {
+	name := map[state.Kind]skills.Name{
+		state.KindBuild:  skills.Issue,
+		state.KindReview: skills.Review,
+		state.KindPlan:   skills.Planning,
 	}[s.Kind]
+
+	instructions, err := skills.Read(name, e.Cfg.Agent.SkillsDir)
+	if err != nil {
+		return nil, err
+	}
 
 	subject := fmt.Sprintf("GitHub issue #%d", s.Ref)
 	if s.Kind == state.KindReview {
 		subject = fmt.Sprintf("the review comments on pull request #%d", s.Ref)
 	}
-	prompt := fmt.Sprintf("Work %s end to end. Invoke the `%s` skill now and follow it exactly — it is the complete specification for this run.", subject, skill)
+	prompt := fmt.Sprintf("Work %s end to end, following the run instructions in your system prompt exactly. They are the complete specification for this run.", subject)
 
-	args := []string{"-p", prompt, "--permission-mode", "bypassPermissions", "--output-format", "text"}
+	args := []string{
+		"-p", prompt,
+		"--append-system-prompt", string(instructions),
+		"--permission-mode", "bypassPermissions",
+		"--output-format", "text",
+	}
 	if e.Cfg.Agent.Model != "" {
 		args = append(args, "--model", e.Cfg.Agent.Model)
 	}
-	return append(args, e.Cfg.Agent.ExtraArgs...)
+	return append(args, e.Cfg.Agent.ExtraArgs...), nil
 }
 
-func (e Engine) runEnv(s Start, r state.Run) runner.Env {
+func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {
 	l := e.Cfg.Labels
-	return runner.Env{
+	env := runner.Env{
 		"CLAUDEFLOW_ISSUE":          strconv.Itoa(s.Ref),
 		"CLAUDEFLOW_PR":             strconv.Itoa(s.Ref),
 		"CLAUDEFLOW_REPO":           e.Cfg.Repo,
@@ -381,4 +473,10 @@ func (e Engine) runEnv(s Start, r state.Run) runner.Env {
 		"CLAUDEFLOW_LABEL_BLOCKED":  l.Blocked,
 		"CLAUDEFLOW_LABEL_PLANNING": l.Planning,
 	}
+	if s.Kind.HoldsSlot() {
+		for k, v := range e.serviceURLs(ctx, s.Slot) {
+			env[k] = v
+		}
+	}
+	return env
 }
