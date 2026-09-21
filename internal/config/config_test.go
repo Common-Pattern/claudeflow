@@ -212,3 +212,33 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("Load on a missing file succeeded, want error")
 	}
 }
+
+// A relative root propagates into every derived path, and a relative path is
+// meaningless to anything that does not share this process's working
+// directory. A Compose bind mount refuses one outright.
+func TestPathsAreAlwaysAbsolute(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"paths:\n  root: .\n"), ".")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for name, p := range map[string]string{
+		"Root": cfg.Paths.Root, "State": cfg.Paths.State, "Worktrees": cfg.Paths.Worktrees,
+	} {
+		if !filepath.IsAbs(p) {
+			t.Errorf("Paths.%s = %q, want an absolute path", name, p)
+		}
+	}
+}
+
+func TestExplicitRelativePathsAreResolved(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"paths:\n  root: .\n  state: var/flow\n"), ".")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !filepath.IsAbs(cfg.Paths.State) {
+		t.Errorf("Paths.State = %q, want absolute", cfg.Paths.State)
+	}
+	if !filepath.IsAbs(cfg.Paths.Worktrees) {
+		t.Errorf("Paths.Worktrees = %q, want absolute", cfg.Paths.Worktrees)
+	}
+}

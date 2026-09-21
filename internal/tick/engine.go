@@ -115,6 +115,9 @@ func (e Engine) stack(n int) compose.Compose {
 		Dir:      e.Cfg.Paths.Root,
 		Profiles: e.Cfg.Compose.Profiles,
 		Env:      e.stackEnv(n, "", ""),
+		// A wedged provider must fail one run rather than block the tick, and
+		// with it every reap, dispatch and status until someone intervenes.
+		Timeout: e.Cfg.Compose.ReadyTimeout,
 	}
 }
 
@@ -182,6 +185,45 @@ func (e Engine) Reap(ctx context.Context) error {
 		}
 		if err := e.Store.DeleteRun(r.ID()); err != nil {
 			return err
+		}
+	}
+	return e.releaseStrandedClaims(ctx)
+}
+
+// releaseStrandedClaims re-queues issues claimed by a run that never recorded
+// itself.
+//
+// Start claims the label before spawning, so that two ticks cannot both start
+// on one issue. When the spawn then fails — a bad hook, a stack that will not
+// come up — the claim is left behind with no run record. Reap walks run
+// records, so it never sees these, and the issue sits in the working state
+// forever: invisible to dispatch, and reported as in-flight by status.
+func (e Engine) releaseStrandedClaims(ctx context.Context) error {
+	claimed, err := e.Client.OpenIssues(ctx, e.Cfg.Labels.Working)
+	if err != nil {
+		return fmt.Errorf("list claimed issues: %w", err)
+	}
+	if len(claimed) == 0 {
+		return nil
+	}
+
+	live := map[int]struct{}{}
+	runs, err := e.Store.Runs()
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		live[r.Ref] = struct{}{}
+	}
+
+	for _, issue := range claimed {
+		if _, ok := live[issue.Number]; ok {
+			continue
+		}
+		e.logf("issue #%d: claimed with no run behind it; re-queueing", issue.Number)
+		if err := e.Client.EditLabels(ctx, issue.Number,
+			[]string{e.Cfg.Labels.Queued}, []string{e.Cfg.Labels.Working}); err != nil {
+			e.logf("issue #%d: could not re-queue: %v", issue.Number, err)
 		}
 	}
 	return nil

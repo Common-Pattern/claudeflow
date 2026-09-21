@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -34,7 +35,18 @@ type Compose struct {
 	Profiles []string
 	// Env is set on the compose process, so the file can interpolate it.
 	Env map[string]string
+	// Timeout bounds every compose command. Zero means DefaultTimeout.
+	//
+	// This is not belt-and-braces. podman's compose has been observed to wedge
+	// in epoll waiting on a health condition it never resolves, and an
+	// unbounded command there blocks the whole supervisor: no reaping, no
+	// dispatch, no status, until someone notices and kills it by hand. A stuck
+	// provider must fail one run, not stop the system.
+	Timeout time.Duration
 }
+
+// DefaultTimeout bounds a compose command that sets none.
+const DefaultTimeout = 15 * time.Minute
 
 // ErrNoCompose means no compose implementation was found.
 var ErrNoCompose = fmt.Errorf("no compose implementation found: install docker compose or podman compose")
@@ -89,18 +101,80 @@ func (c Compose) run(ctx context.Context, sub ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = c.Dir
-	cmd.Env = os.Environ()
-	for k, v := range c.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Kill the whole group: podman compose is a wrapper that spawns the real
+	// implementation, and signalling only the wrapper leaves that behind.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return cmd.Process.Kill()
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Dir = c.Dir
+	cmd.Env = composeEnv(c.Env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return stdout.String(), fmt.Errorf("%s: timed out after %s: %w", strings.Join(argv, " "), timeout, ctx.Err())
+		}
 		return stdout.String(), fmt.Errorf("%s: %s", strings.Join(argv, " "), strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// systemdMarkers are the variables systemd sets for a unit it manages.
+//
+// They are stripped before running compose. podman reads INVOCATION_ID as
+// "systemd is managing me", and under it `up -d` created the first service and
+// then sat in epoll indefinitely — no error, no progress, and the supervisor
+// blocked behind it. JOURNAL_STREAM additionally makes every container log to
+// the supervisor's journal, drowning its own output.
+//
+// Stripping them is not a workaround for podman: the containers belong to the
+// run, not to the supervisor's unit, so claiming otherwise was the error.
+var systemdMarkers = []string{
+	"INVOCATION_ID",
+	"JOURNAL_STREAM",
+	"NOTIFY_SOCKET",
+	"LISTEN_FDS",
+	"LISTEN_PID",
+	"LISTEN_FDNAMES",
+	"MAINPID",
+	"MANAGERPID",
+}
+
+// composeEnv returns the environment for a compose command: the process
+// environment without systemd's markers, plus the caller's additions.
+func composeEnv(extra map[string]string) []string {
+	drop := make(map[string]struct{}, len(systemdMarkers))
+	for _, k := range systemdMarkers {
+		drop[k] = struct{}{}
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if _, skip := drop[name]; skip {
+			continue
+		}
+		out = append(out, kv)
+	}
+	for k, v := range extra {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // Up starts the stack detached.

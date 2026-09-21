@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -283,4 +284,73 @@ func writeFile(path, body string) error { return os.WriteFile(path, []byte(body)
 
 func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
+}
+
+// A wedged provider must fail one run, not block the supervisor. podman's
+// compose has been observed sitting in epoll on a health condition it never
+// resolved, stopping every tick until it was killed by hand.
+func TestRunTimesOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	c := Compose{Bin: []string{"sh", "-c", "sleep 60 #"}, Timeout: 2 * time.Second}
+
+	start := time.Now()
+	_, err := c.run(context.Background(), "ignored")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a hung command returned no error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v, want it to say it timed out", err)
+	}
+	if elapsed > 15*time.Second {
+		t.Errorf("took %s to give up on a 2s timeout", elapsed)
+	}
+}
+
+func TestDefaultTimeoutApplies(t *testing.T) {
+	if (Compose{}).Timeout != 0 {
+		t.Fatal("zero value has a timeout set")
+	}
+	if DefaultTimeout <= 0 {
+		t.Error("DefaultTimeout must be positive, or every command is unbounded")
+	}
+}
+
+// podman reads INVOCATION_ID as "systemd is managing me" and, under it,
+// `up -d` created the first service and then sat in epoll forever — no error,
+// no progress, and the supervisor blocked behind it. The containers belong to
+// the run, not to the supervisor's unit.
+func TestComposeEnvStripsSystemdMarkers(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "deadbeef")
+	t.Setenv("JOURNAL_STREAM", "8:12345")
+	t.Setenv("NOTIFY_SOCKET", "/run/systemd/notify")
+	t.Setenv("KEEP_ME", "yes")
+
+	env := composeEnv(map[string]string{"CLAUDEFLOW_SLOT": "3"})
+
+	for _, banned := range systemdMarkers {
+		for _, kv := range env {
+			if strings.HasPrefix(kv, banned+"=") {
+				t.Errorf("%s survived into the compose environment", banned)
+			}
+		}
+	}
+	if !slices.Contains(env, "KEEP_ME=yes") {
+		t.Error("an unrelated variable was dropped")
+	}
+	if !slices.Contains(env, "CLAUDEFLOW_SLOT=3") {
+		t.Error("the caller's addition is missing")
+	}
+}
+
+// XDG_RUNTIME_DIR is how rootless podman finds its socket; dropping it would
+// break the thing we are trying to fix.
+func TestComposeEnvKeepsRuntimeDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+	if !slices.Contains(composeEnv(nil), "XDG_RUNTIME_DIR=/run/user/1000") {
+		t.Error("XDG_RUNTIME_DIR was stripped; rootless podman needs it")
+	}
 }

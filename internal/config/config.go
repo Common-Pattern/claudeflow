@@ -280,11 +280,28 @@ func (c *Config) applyDerivedDefaults(baseDir string) {
 	if !filepath.IsAbs(c.Paths.Root) && baseDir != "" {
 		c.Paths.Root = filepath.Join(baseDir, c.Paths.Root)
 	}
+	// Absolute, always.
+	//
+	// A relative root propagates into every derived path, and a relative path
+	// is meaningless to anything that does not share this process's working
+	// directory. A Compose bind mount refuses one outright — "invalid container
+	// path, must be an absolute path" — which surfaces as a run that cannot
+	// start, several layers from the `paths.root: .` that caused it.
+	if abs, err := filepath.Abs(c.Paths.Root); err == nil {
+		c.Paths.Root = abs
+	}
 	if c.Paths.State == "" {
 		c.Paths.State = filepath.Join(c.Paths.Root, ".claudeflow")
 	}
 	if c.Paths.Worktrees == "" {
 		c.Paths.Worktrees = filepath.Join(c.Paths.State, "worktrees")
+	}
+	for _, p := range []*string{&c.Paths.State, &c.Paths.Worktrees} {
+		if !filepath.IsAbs(*p) {
+			if abs, err := filepath.Abs(*p); err == nil {
+				*p = abs
+			}
+		}
 	}
 }
 
