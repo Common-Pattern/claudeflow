@@ -1,0 +1,15 @@
+dist/
+
+/claudeflow
+cmd/claudeflow/claudeflow
+*.exe
+*.test
+*.out
+*.prof
+
+.claudeflow/
+
+.idea/
+.vscode/
+*.swp
+.DS_Store
