@@ -304,6 +304,32 @@ func TestAliveSinceRejectsAMismatchedStart(t *testing.T) {
 	}
 }
 
+// The start time must come from the kernel's record of the process, not from
+// when /proc happened to instantiate its entry. PID 1 began at boot; its /proc
+// entry is routinely stamped days later.
+func TestProcessStartOfInitIsBoot(t *testing.T) {
+	got, ok := processStart(1)
+	if !ok {
+		t.Skip("no /proc")
+	}
+	boot, _ := bootTime()
+	if d := got.Sub(boot); d < 0 || d > StartTimeTolerance {
+		t.Errorf("processStart(1) = %s, want within %s of boot at %s", got, StartTimeTolerance, boot)
+	}
+}
+
+func TestStatStartTicks(t *testing.T) {
+	// A command name holding spaces and a ')' must not shift the fields.
+	line := "4242 (a) b (c)) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10 18446744073709551615"
+	got, ok := statStartTicks(line)
+	if !ok || got != 987654 {
+		t.Errorf("statStartTicks = %d, %v; want 987654, true", got, ok)
+	}
+	if _, ok := statStartTicks("garbage"); ok {
+		t.Error("statStartTicks accepted a line with no command name")
+	}
+}
+
 func TestHitUsageLimit(t *testing.T) {
 	cases := []struct {
 		transcript string

@@ -278,6 +278,10 @@ func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error
 	env["CLAUDEFLOW_FAILING_CHECKS"] = failing
 	env["CLAUDEFLOW_ATTEMPT"] = strconv.Itoa(r.Attempts)
 
+	// A fix run is a new process. Keeping the first run's start time made
+	// every fix look like a recycled pid, and the next tick reaped it and took
+	// its stack down while the agent was still working.
+	r.Started = e.now()
 	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
 		Command: e.Cfg.Agent.Command,
 		Args:    args,

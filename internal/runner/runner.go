@@ -17,6 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -364,15 +366,73 @@ func AliveSince(pid int, started time.Time) bool {
 	return gap <= StartTimeTolerance
 }
 
-// processStart reads when the kernel says pid began. The /proc entry for a
-// process is stamped with its start time, which is the only start time no
-// bookkeeping of ours can get wrong.
+// processStart reads when the kernel says pid began, which is the only start
+// time no bookkeeping of ours can get wrong.
+//
+// It is field 22 of /proc/<pid>/stat, in clock ticks since boot. It is NOT the
+// mtime of /proc/<pid>: that is when the kernel instantiated the proc inode,
+// which is whenever something first looked, and again after the inode is
+// evicted. On a host up for three weeks most processes carried an mtime days
+// after their start, so a live run re-adopted after a restart could be judged
+// a recycled pid and reaped with its agent still working.
 func processStart(pid int) (time.Time, bool) {
-	info, err := os.Stat(filepath.Join("/proc", fmt.Sprint(pid)))
+	raw, err := os.ReadFile(filepath.Join("/proc", fmt.Sprint(pid), "stat"))
 	if err != nil {
 		return time.Time{}, false
 	}
-	return info.ModTime(), true
+	ticks, ok := statStartTicks(string(raw))
+	if !ok {
+		return time.Time{}, false
+	}
+	boot, ok := bootTime()
+	if !ok {
+		return time.Time{}, false
+	}
+	return boot.Add(time.Duration(ticks) * time.Second / clockTicks), true
+}
+
+// clockTicks is USER_HZ, the unit of /proc/<pid>/stat's start time. The kernel
+// fixes it at 100 for userspace on every architecture Linux runs on; reading it
+// properly needs sysconf, and with it cgo.
+const clockTicks = 100
+
+// statStartTicks extracts the start time from a /proc/<pid>/stat line. The
+// command name is field 2 and may itself hold spaces and parentheses, so the
+// fields are counted from the last ')'.
+func statStartTicks(stat string) (uint64, bool) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, false
+	}
+	// After the name come the state (field 3) onwards; start time is field 22.
+	fields := strings.Fields(stat[i+1:])
+	const startField = 22 - 3
+	if len(fields) <= startField {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(fields[startField], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// bootTime reads when the system booted, from /proc/stat's btime line.
+func bootTime() (time.Time, bool) {
+	raw, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
+			secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return time.Time{}, false
+			}
+			return time.Unix(secs, 0), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func exitCode(ps *os.ProcessState) int {

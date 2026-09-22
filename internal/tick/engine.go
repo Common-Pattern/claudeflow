@@ -396,6 +396,11 @@ func (e Engine) start(ctx context.Context, s Start) error {
 		return err
 	}
 
+	// Started is what re-adoption checks the pid's kernel start time against,
+	// so it is stamped at the fork. Stamped before prepare, it sat minutes early
+	// behind the install hook and a cold stack, and a live run read as a
+	// recycled pid and was reaped under its agent.
+	run.Started = e.now()
 	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
 		Command: e.Cfg.Agent.Command,
 		Args:    args,
