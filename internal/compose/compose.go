@@ -127,7 +127,14 @@ func (c Compose) run(ctx context.Context, sub ...string) (string, error) {
 		if ctx.Err() != nil {
 			return stdout.String(), fmt.Errorf("%s: timed out after %s: %w", strings.Join(argv, " "), timeout, ctx.Err())
 		}
-		return stdout.String(), fmt.Errorf("%s: %s", strings.Join(argv, " "), strings.TrimSpace(stderr.String()))
+		// The error itself goes in too. A binary that is not there, or not
+		// executable, fails before writing anything, and stderr alone reported
+		// that as an empty message.
+		msg := err.Error()
+		if out := strings.TrimSpace(stderr.String()); out != "" {
+			msg += ": " + out
+		}
+		return stdout.String(), fmt.Errorf("%s: %s", strings.Join(argv, " "), msg)
 	}
 	return stdout.String(), nil
 }

@@ -354,3 +354,16 @@ func TestComposeEnvKeepsRuntimeDir(t *testing.T) {
 		t.Error("XDG_RUNTIME_DIR was stripped; rootless podman needs it")
 	}
 }
+
+// A compose binary that is not there fails before writing to stderr. The error
+// must still say why: reporting only stderr gave "up -d:" and nothing more.
+func TestRunReportsAMissingBinary(t *testing.T) {
+	c := Compose{Bin: []string{filepath.Join(t.TempDir(), "no-such-compose")}}
+	_, err := c.run(context.Background(), "up", "-d")
+	if err == nil {
+		t.Fatal("run succeeded with a binary that does not exist")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("err = %q, want it to name the missing binary", err)
+	}
+}

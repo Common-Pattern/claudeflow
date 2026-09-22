@@ -1,7 +1,9 @@
 package tick
 
 import (
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +106,42 @@ func TestClaimKeepsTheQueuedLabel(t *testing.T) {
 	}
 	if e.Cfg.Labels.IsQueued(labels) {
 		t.Errorf("a claimed issue still reads as queued: %v", labels)
+	}
+}
+
+// A start that fails after its claim resolves the claim itself, as blocked.
+// Left to the stranded-claim sweep it was re-queued and re-dispatched, and a
+// failure that was not transient added and removed the working label on every
+// tick, forever.
+func TestFailedStartSettlesAsBlocked(t *testing.T) {
+	e, f := newEngine(t)
+	e.Cfg.Agent.Command = filepath.Join(t.TempDir(), "no-such-agent")
+	f.AddIssue(42, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Planning)
+
+	if err := e.Start(t.Context(), Start{Kind: state.KindPlan, Ref: 42}); err == nil {
+		t.Fatal("Start succeeded with an agent that does not exist")
+	}
+	labels, _ := f.Labels(t.Context(), 42)
+	if slices.Contains(labels, e.Cfg.Labels.Working) {
+		t.Errorf("labels = %v, want the claim released", labels)
+	}
+	if !slices.Contains(labels, e.Cfg.Labels.Blocked) {
+		t.Errorf("labels = %v, want blocked", labels)
+	}
+	if len(f.Comments[42]) != 1 || !strings.Contains(f.Comments[42][0], "no-such-agent") {
+		t.Errorf("comments = %q, want one naming the failure", f.Comments[42])
+	}
+
+	// And the next tick leaves it alone rather than re-queueing it.
+	if err := e.Reap(t.Context()); err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+	after, _ := f.Labels(t.Context(), 42)
+	if !slices.Equal(after, labels) {
+		t.Errorf("labels after Reap = %v, want unchanged %v", after, labels)
+	}
+	if e.Cfg.Labels.IsQueued(after) {
+		t.Errorf("labels = %v, want it NOT ready to re-dispatch", after)
 	}
 }
 

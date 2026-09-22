@@ -224,8 +224,9 @@ func (e Engine) Reap(ctx context.Context) error {
 // itself.
 //
 // Start claims the label before spawning, so that two ticks cannot both start
-// on one issue. When the spawn then fails — a bad hook, a stack that will not
-// come up — the claim is left behind with no run record. Reap walks run
+// on one issue. A spawn that fails releases its own claim, but a supervisor
+// that dies between the claim and the record — killed, restarted, the machine
+// going down — leaves the claim behind with no run record. Reap walks run
 // records, so it never sees these, and the issue sits in the working state
 // forever: invisible to dispatch, and reported as in-flight by status.
 func (e Engine) releaseStrandedClaims(ctx context.Context) error {
@@ -245,7 +246,6 @@ func (e Engine) releaseStrandedClaims(ctx context.Context) error {
 	for _, r := range runs {
 		live[r.Ref] = struct{}{}
 	}
-	_ = live
 
 	for _, issue := range claimed {
 		if _, ok := live[issue.Number]; ok {
@@ -314,9 +314,15 @@ func (e Engine) hitUsageLimit(r state.Run) bool {
 
 // Start claims the work and begins a run.
 //
-// The claim happens before the spawn. If the spawn then fails the issue sits
-// claimed with no record, and the next tick's Reap resolves it — the opposite
-// order would let two ticks start two runs on one issue.
+// The claim happens before the spawn — the opposite order would let two ticks
+// start two runs on one issue. A spawn that then fails resolves its own claim
+// here, as blocked.
+//
+// It used to leave the claim for the next tick's stranded-claim sweep, which
+// re-queued it. A failure that is not transient — a compose binary that is not
+// there, a Compose file that does not parse — then failed identically on every
+// tick: the working label went on and came off every two minutes, forever, and
+// the reason was never written anywhere a reader of the issue would see it.
 func (e Engine) Start(ctx context.Context, s Start) error {
 	// Claiming ADDS the working label. The queued label stays: it says the
 	// issue is the agent's, which does not stop being true while a run is on
@@ -325,6 +331,32 @@ func (e Engine) Start(ctx context.Context, s Start) error {
 	if err := e.Client.EditLabels(ctx, s.Ref, []string{e.Cfg.Labels.Working}, e.Cfg.Labels.Resolution()); err != nil {
 		return fmt.Errorf("claim: %w", err)
 	}
+	if err := e.start(ctx, s); err != nil {
+		if rerr := e.releaseFailedStart(ctx, s, err); rerr != nil {
+			e.logf("%s #%d: could not release the claim: %v", s.Kind, s.Ref, rerr)
+		}
+		return err
+	}
+	return nil
+}
+
+// releaseFailedStart resolves the claim of a run that never began.
+func (e Engine) releaseFailedStart(ctx context.Context, s Start, cause error) error {
+	if s.Kind == state.KindReview {
+		// The claim sits on a pull request, and a review run's outcome is not
+		// labelled; the review marker is still owed, so it is retried.
+		return e.Client.EditLabels(ctx, s.Ref, nil, []string{e.Cfg.Labels.Working})
+	}
+	body := fmt.Sprintf("The unattended run could not start:\n\n```\n%v\n```\n\nComment here, or re-apply `%s`, to try again.",
+		cause, e.Cfg.Labels.Queued)
+	if err := e.Client.Comment(ctx, s.Ref, body); err != nil {
+		e.logf("%s #%d: could not comment: %v", s.Kind, s.Ref, err)
+	}
+	return e.Client.EditLabels(ctx, s.Ref, []string{e.Cfg.Labels.Blocked}, []string{e.Cfg.Labels.Working})
+}
+
+// start does everything after the claim: environment, spawn, record.
+func (e Engine) start(ctx context.Context, s Start) error {
 	// Record where the thread stands now, so a comment posted before the run
 	// started is not replayed as new when it ends.
 	if latest, err := e.Client.LatestCommentBy(ctx, forge.TargetIssue, s.Ref, e.Cfg.User); err == nil {
