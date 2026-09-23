@@ -1,6 +1,7 @@
 package tick
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -272,7 +273,7 @@ func TestDispatchBlocked(t *testing.T) {
 	if err := st.SetFlag(state.Paused, ""); err != nil {
 		t.Fatalf("SetFlag: %v", err)
 	}
-	if err := DispatchBlocked(st, now); err != ErrPaused {
+	if err := DispatchBlocked(st, now); !errors.Is(err, ErrPaused) {
 		t.Errorf("err = %v, want ErrPaused", err)
 	}
 	if err := st.ClearFlag(state.Paused); err != nil {
@@ -281,7 +282,7 @@ func TestDispatchBlocked(t *testing.T) {
 	if err := st.SetRateLimited(now.Add(time.Hour)); err != nil {
 		t.Fatalf("SetRateLimited: %v", err)
 	}
-	if err := DispatchBlocked(st, now); err != ErrRateLimited {
+	if err := DispatchBlocked(st, now); !errors.Is(err, ErrRateLimited) {
 		t.Errorf("err = %v, want ErrRateLimited", err)
 	}
 	// Once the backoff elapses it must clear itself.

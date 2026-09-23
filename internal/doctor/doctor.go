@@ -396,7 +396,7 @@ func checkCompose(ctx context.Context, o Options) Result {
 	return note(ctx, o, r, line, composeUpstream(out))
 }
 
-func checkComposeFile(ctx context.Context, o Options) Result {
+func checkComposeFile(_ context.Context, o Options) Result {
 	rel := o.Cfg.Compose.File
 	path := rel
 	if !filepath.IsAbs(path) {

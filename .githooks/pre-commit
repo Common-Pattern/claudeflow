@@ -1,0 +1,50 @@
+#!/bin/sh
+# Pre-commit checks. Install once per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# git cannot install a hook for you — a repository that could run code on
+# checkout would be a way to attack anyone who cloned it — so this is opt-in
+# and CI remains the thing that actually enforces the result.
+set -e
+
+# git exports GIT_DIR, GIT_INDEX_FILE and friends to a hook, pointing at the
+# commit being made. Anything this hook runs inherits them — and the tests run
+# `git worktree add` in temporary repositories of their own, which then tried
+# to use this commit's index and failed with "index file open failed". Clear
+# them, so what runs here sees the same environment it would from a shell.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX \
+	GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+# Nothing staged for Go means nothing to say.
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+[ -n "$staged" ] || exit 0
+
+fail() {
+	echo "pre-commit: $1" >&2
+	echo "commit aborted; --no-verify overrides this" >&2
+	exit 1
+}
+
+# gofmt ships inside GOROOT and is not always on PATH even where go is.
+gofmt=$(command -v gofmt || echo "$(go env GOROOT)/bin/gofmt")
+[ -x "$gofmt" ] || fail "cannot find gofmt (is go installed?)"
+
+unformatted=$($gofmt -l $staged)
+if [ -n "$unformatted" ]; then
+	echo "$unformatted" >&2
+	fail "not gofmt-clean — run: gofmt -w ."
+fi
+
+go vet ./... || fail "go vet found problems"
+
+if command -v golangci-lint >/dev/null 2>&1; then
+	golangci-lint run || fail "golangci-lint found problems"
+else
+	echo "pre-commit: golangci-lint not installed; skipping (CI will run it)" >&2
+	echo "  https://golangci-lint.run/docs/welcome/install/" >&2
+fi
+
+# The tests are the slow part, and a commit is not a push: -short skips the
+# ones that shell out to a container runtime or wait on a real process.
+go test -short ./... || fail "tests failed"

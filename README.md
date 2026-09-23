@@ -90,6 +90,21 @@ tool silently does not hold, and lenient parsing means it is only ever
 discovered from behaviour, during a run. `doctor` reports the parser's own
 complaint, with the line number.
 
+## Contributing
+
+The checks CI runs are gofmt, `go vet`, `golangci-lint`, `go test -race` and
+`go build`. To run the same ones before each commit:
+
+```sh
+git config core.hooksPath .githooks   # once per clone
+```
+
+git deliberately will not install a hook for you — a repository that ran code
+on checkout would be a way to attack anyone who cloned it — so the hook is
+opt-in, and CI is what actually enforces the result. The hook skips
+`golangci-lint` with a note if it is not installed, and `--no-verify` overrides
+it.
+
 ## Install
 
 ```sh

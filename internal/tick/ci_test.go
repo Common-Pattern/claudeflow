@@ -1,6 +1,7 @@
 package tick
 
 import (
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestReapParksARunThatOpenedAPullRequest(t *testing.T) {
 	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
 	f.PRByBranch["claude/build-7"] = 200
 	if err := e.Store.SaveRun(state.Run{
-		Kind: state.KindBuild, Ref: 7, Slot: 1, PID: 1,
+		Kind: state.KindBuild, Ref: 7, Slot: 1, PID: deadPID(t),
 		Branch: "claude/build-7", Started: time.Now(),
 	}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
@@ -60,7 +61,7 @@ func TestReapResolvesARunWithNoPullRequest(t *testing.T) {
 	e, f := newEngine(t)
 	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
 	if err := e.Store.SaveRun(state.Run{
-		Kind: state.KindBuild, Ref: 7, Slot: 1, PID: 1,
+		Kind: state.KindBuild, Ref: 7, Slot: 1, PID: deadPID(t),
 		Branch: "claude/build-7", Started: time.Now(),
 	}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
@@ -158,7 +159,7 @@ func TestAwaitingCISkipsWhenAFixIsLive(t *testing.T) {
 	// A second record on the same pull request, still running.
 	if err := e.Store.SaveRun(state.Run{
 		Kind: state.KindReview, Ref: 99, Slot: 2, PR: 200,
-		Phase: state.PhaseRunning, PID: 1, Started: time.Now(),
+		Phase: state.PhaseRunning, PID: os.Getpid(), Started: time.Now(),
 	}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestParkedRunReleasesItsSlot(t *testing.T) {
 	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
 	f.PRByBranch["claude/build-7"] = 200
 	if err := e.Store.SaveRun(state.Run{
-		Kind: state.KindBuild, Ref: 7, Slot: 3, PID: 1,
+		Kind: state.KindBuild, Ref: 7, Slot: 3, PID: deadPID(t),
 		Branch: "claude/build-7", Started: time.Now(),
 	}); err != nil {
 		t.Fatalf("SaveRun: %v", err)

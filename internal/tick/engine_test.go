@@ -1,6 +1,7 @@
 package tick
 
 import (
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -44,6 +45,27 @@ func TestReapReleasesAClaimWithNoRunBehindIt(t *testing.T) {
 	}
 }
 
+// deadPID returns the id of a process that has exited.
+//
+// Tests used to write PID 1 for "a run whose process is gone", relying on its
+// start time being nothing like the record's. That holds on a host that has
+// been up a while and fails on one that just booted: a CI runner's init is
+// seconds old, the gap falls inside the tolerance, and the run reads as alive.
+// A process that really has exited is the same claim without the dependency on
+// how long the machine has been running.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start a throwaway process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	return pid
+}
+
 // An issue WITH a run record is the record path's business, not the stranded
 // -claim sweep's. A record whose process is gone resolves to blocked, which is
 // a decision; re-queueing it would retry a run that died for an unknown reason
@@ -52,7 +74,7 @@ func TestReapResolvesAClaimWithARecordRatherThanRequeueing(t *testing.T) {
 	e, f := newEngine(t)
 	f.AddIssue(42, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
 	if err := e.Store.SaveRun(state.Run{
-		Kind: state.KindBuild, Ref: 42, Slot: 1, PID: 1, Started: time.Now(),
+		Kind: state.KindBuild, Ref: 42, Slot: 1, PID: deadPID(t), Started: time.Now(),
 	}); err != nil {
 		t.Fatalf("SaveRun: %v", err)
 	}

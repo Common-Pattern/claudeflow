@@ -46,6 +46,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Pinned: a linter that updates itself turns an unrelated commit red.
+          version: v2.13.2
+
       - name: go test
         run: go test ./... -race -count=1
 

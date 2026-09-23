@@ -1,0 +1,37 @@
+# golangci-lint v2. `go vet` and gofmt still run in CI on their own, because
+# they are the floor and should not need a tool to be installed to enforce.
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - errorlint # a wrapped error compared with == is a bug that hides
+    - misspell
+    - revive
+    - unconvert
+    - usetesting # t.Context(), t.Setenv and friends over hand-rolled equivalents
+    - wastedassign
+
+  settings:
+    errcheck:
+      # Deliberately ignored errors are written `_ = f()` throughout this
+      # codebase, which errcheck accepts; these are the ones where even that
+      # would be noise.
+      exclude-functions:
+        - (*os.File).Close
+        - (io.Closer).Close
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # A test's own scaffolding may ignore what it does not assert on.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

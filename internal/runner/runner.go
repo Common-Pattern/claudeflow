@@ -262,11 +262,11 @@ func (p *Process) supervise(ctx context.Context, timeout time.Duration) {
 		case <-expired:
 			expired = nil
 			p.timedOut.Store(true)
-			go p.terminate()
+			go func() { _ = p.terminate() }()
 		case <-cancelled:
 			cancelled = nil
 			p.canceled.Store(true)
-			go p.terminate()
+			go func() { _ = p.terminate() }()
 		}
 	}
 }
@@ -481,17 +481,6 @@ func openLog(path string) (*os.File, error) {
 		return nil, fmt.Errorf("open log %s: %w", path, err)
 	}
 	return f, nil
-}
-
-type lockedWriter struct {
-	mu *sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
 }
 
 // capture keeps the last MaxCapturedBytes of a stream.

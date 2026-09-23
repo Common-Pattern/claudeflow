@@ -151,7 +151,7 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 
 	l.logf("merging #%d at %s", pr, short(headSHA))
 	if err := l.Client.Merge(ctx, pr, headSHA); err != nil {
-		return res, fmt.Errorf("%w: %v", ErrMergeRefused, err)
+		return res, fmt.Errorf("%w: %w", ErrMergeRefused, err)
 	}
 	res.Closes = closes
 

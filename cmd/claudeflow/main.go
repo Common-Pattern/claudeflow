@@ -483,7 +483,7 @@ func lockFile(path string) (func(), error) {
 		return nil, fmt.Errorf("lock: %w", err)
 	}
 	return func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
 }
