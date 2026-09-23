@@ -61,6 +61,31 @@ long after the cause, with nobody watching:
   rather than only finding it on PATH, and `compose.bin` names one explicitly
   where the engine's default is not the one you want.
 
+### Staying current
+
+`doctor` also reports what is old. It compares claudeflow and `gh` against
+their latest releases and warns when either is behind, and says what the
+compose implementation's current release is. Being behind is never a failure —
+an old tool works until it does not — but a supervisor running a build from
+before a fix is the one fault nobody goes looking for, because it looks
+healthy.
+
+Nothing here updates anything. The agent CLI has its own updater, and a
+supervisor that reinstalls a tool mid-flight is a worse idea than one that says
+the updater is off — so `doctor` asks `claude doctor` whether auto-updates are
+on and warns when they are not. An agent CLI that never moves pins the model
+the `opus` alias resolves to, its skills, and its bug fixes to whatever was
+installed once.
+
+### The configuration is parsed strictly
+
+A key claudeflow does not read is an error, not a comment. `autoupdate` for
+`autoUpdate`, a setting indented under the wrong block, one left behind by a
+version that stopped reading it: each is an intention written down that the
+tool silently does not hold, and lenient parsing means it is only ever
+discovered from behaviour, during a run. `doctor` reports the parser's own
+complaint, with the line number.
+
 ## Install
 
 ```sh
@@ -216,7 +241,6 @@ agent:
   model: opus
   # extraArgs: []
   # skillsDir: ./my-skills   # overrides the skills shipped in the binary
-  autoUpdate: true
   # Extra environment for the run, expanded against the addresses above. This
   # is how a project points its own tooling at the run's containers. A test
   # harness that refuses to guess its database — the correct behaviour — has
@@ -298,7 +322,7 @@ checkout left running, which claudeflow's own records cannot.
 | `claudeflow pause` | stop dispatching new runs. Live runs continue |
 | `claudeflow resume` | undo `pause` |
 | `claudeflow stop` | stop live runs |
-| `claudeflow doctor` | check dependencies, authentication and configuration. Non-zero if a run would not get far |
+| `claudeflow doctor` | check dependencies, authentication, versions and configuration. Non-zero if a run would not get far |
 | `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
 | `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
 | `claudeflow labels` | create or update the six labels in the repository. Run once per repo |

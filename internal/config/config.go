@@ -8,8 +8,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,9 +241,6 @@ type Agent struct {
 	ExtraArgs []string `yaml:"extraArgs"`
 	// SkillsDir overrides the skills shipped with claudeflow.
 	SkillsDir string `yaml:"skillsDir"`
-	// AutoUpdate runs the agent CLI's own update command once a day, when
-	// nothing is live.
-	AutoUpdate bool `yaml:"autoUpdate"`
 	// Env is extra environment for the run, expanded against the stack's
 	// resolved addresses — CLAUDEFLOW_PORT_<SERVICE>, CLAUDEFLOW_HOST_<SERVICE>
 	// and CLAUDEFLOW_URL_<SERVICE>.
@@ -293,7 +292,7 @@ func Default() Config {
 		},
 		Slots:   Slots{Min: 1, Max: 4},
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
-		Agent:   Agent{Command: "claude", Model: "opus", AutoUpdate: true},
+		Agent:   Agent{Command: "claude", Model: "opus"},
 	}
 }
 
@@ -311,7 +310,15 @@ func Load(path string) (Config, error) {
 // baseDir, so a config file can sit inside the checkout it describes.
 func Parse(raw []byte, baseDir string) (Config, error) {
 	cfg := Default()
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	// Unknown keys are an error, not something to skip past. A lenient parser
+	// accepts `autoupdate:` for `autoUpdate:`, a key indented under the wrong
+	// block, and a setting left behind by a version that no longer reads it —
+	// and in every case the operator has written down an intention the tool
+	// silently does not hold. That is only discovered from behaviour, usually
+	// during a run.
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDerivedDefaults(baseDir)
@@ -347,11 +354,16 @@ func (c *Config) applyDerivedDefaults(baseDir string) {
 	if c.Paths.Worktrees == "" {
 		c.Paths.Worktrees = filepath.Join(c.Paths.State, "worktrees")
 	}
+	// Relative to the checkout, NOT to whatever directory the process happens
+	// to be in. filepath.Abs resolves against the working directory, so
+	// `state: .claudeflow` meant one thing to the daemon, whose working
+	// directory is the checkout, and another to `claudeflow -c
+	// ../other/claudeflow.yaml status`, which then read an empty state
+	// directory — no runs, every issue free to dispatch again — and created a
+	// stray .claudeflow where it stood.
 	for _, p := range []*string{&c.Paths.State, &c.Paths.Worktrees} {
 		if !filepath.IsAbs(*p) {
-			if abs, err := filepath.Abs(*p); err == nil {
-				*p = abs
-			}
+			*p = filepath.Join(c.Paths.Root, *p)
 		}
 	}
 }

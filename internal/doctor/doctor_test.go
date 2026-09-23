@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,19 @@ func healthy(t *testing.T) (*fake, config.Config) {
 	f.out["gh auth status"] = "github.com\n  ✓ Logged in to github.com account alice"
 	f.out["claude --version"] = "2.1.278"
 	f.out["docker compose version"] = "Docker Compose version v5.5.1"
+	f.out["claude doctor"] = "Auto-updates: enabled\nAuto-update channel: latest"
 	return f, cfg
+}
+
+// latest scripts the release lookup, so lag checks run without a network.
+func (f *fake) latest(tags map[string]string) Latest {
+	return func(_ context.Context, repo string) (string, error) {
+		tag, ok := tags[repo]
+		if !ok {
+			return "", errors.New("no release")
+		}
+		return tag, nil
+	}
 }
 
 func find(r Report, name string) Result {
@@ -304,5 +317,142 @@ func TestVersionLineStripsColour(t *testing.T) {
 func TestVersionLineFallsBackToFirstRealLine(t *testing.T) {
 	if got := versionLine(">>>> banner <<<<\n\nsomething else"); got != "something else" {
 		t.Errorf("versionLine = %q, want the first non-banner line", got)
+	}
+}
+
+// The agent CLI keeps itself current; claudeflow does not update it. That is
+// only safe if someone notices when the updater is off, which is this check.
+func TestAgentUpdatesDisabledWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	f.out["claude doctor"] = "Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)"
+
+	r := find(Run(context.Background(), f.options(cfg, true)), "agent updates")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn when the updater is off", r.Status)
+	}
+	if !strings.Contains(r.Detail, "disabled") {
+		t.Errorf("detail = %q, want it to say what the CLI reported", r.Detail)
+	}
+}
+
+func TestAgentUpdatesEnabledPasses(t *testing.T) {
+	f, cfg := healthy(t)
+
+	r := find(Run(context.Background(), f.options(cfg, true)), "agent updates")
+	if r.Status != OK {
+		t.Errorf("status = %s, want ok", r.Status)
+	}
+	if !strings.Contains(r.Detail, "latest channel") {
+		t.Errorf("detail = %q, want the channel included", r.Detail)
+	}
+}
+
+// An agent CLI that cannot answer is not a failure — it is an unknown, and the
+// run itself is unaffected.
+func TestAgentUpdatesUnreadableWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	f.out["claude doctor"] = "some future format with no such line"
+
+	r := find(Run(context.Background(), f.options(cfg, true)), "agent updates")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn when the setting cannot be read", r.Status)
+	}
+}
+
+func TestSelfReportsLag(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.Version = "0.2.1"
+	o.Latest = f.latest(map[string]string{upstreamSelf: "v0.3.0"})
+
+	r := find(Run(context.Background(), o), "claudeflow")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn when the supervisor is behind", r.Status)
+	}
+	if !strings.Contains(r.Detail, "0.3.0") || !strings.Contains(r.Fix, "releases") {
+		t.Errorf("result = %+v, want the newer version and where to get it", r)
+	}
+}
+
+func TestSelfCurrentPasses(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.Version = "0.3.0"
+	o.Latest = f.latest(map[string]string{upstreamSelf: "v0.3.0"})
+
+	r := find(Run(context.Background(), o), "claudeflow")
+	if r.Status != OK || !strings.Contains(r.Detail, "current") {
+		t.Errorf("result = %+v, want ok and current", r)
+	}
+}
+
+// A development build has no version to compare, and saying so beats implying
+// it is current.
+func TestDevBuildWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.Version = "dev"
+
+	r := find(Run(context.Background(), o), "claudeflow")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn for a dev build", r.Status)
+	}
+}
+
+func TestGHLagWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.Version = "0.3.0"
+	o.Latest = f.latest(map[string]string{upstreamGH: "v2.101.0"})
+
+	r := find(Run(context.Background(), o), "gh")
+	if r.Status != Warn || !strings.Contains(r.Detail, "2.101.0") {
+		t.Errorf("result = %+v, want a warning naming the newer gh", r)
+	}
+}
+
+// An offline host must not be told its tools are broken. Not knowing whether
+// something is current is not a finding.
+func TestUnreachableUpstreamIsNotAFinding(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.Version = "0.3.0"
+	o.Latest = func(context.Context, string) (string, error) { return "", errors.New("no network") }
+
+	rep := Run(context.Background(), o)
+	if rep.Failed() {
+		t.Errorf("report failed with no network:\n%s", rep)
+	}
+	for _, name := range []string{"claudeflow", "gh"} {
+		if r := find(rep, name); r.Status != OK {
+			t.Errorf("%s = %s, want ok when the lookup could not answer", name, r.Status)
+		}
+	}
+}
+
+// A config that exists and will not parse stops every run. Reporting that as
+// "no config file found" sends the reader looking for a file that is there.
+func TestConfigThatWillNotParseFails(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, false)
+	o.CfgErr = errors.New("parse config: yaml: unmarshal errors:\n  line 70: field autoUpdate not found in type config.Agent")
+
+	r := find(Run(context.Background(), o), "configuration")
+	if r.Status != Fail {
+		t.Errorf("status = %s, want fail for a config that will not load", r.Status)
+	}
+	if !strings.Contains(r.Detail+r.Fix, "autoUpdate") {
+		t.Errorf("result = %+v, want the parser's own complaint", r)
+	}
+}
+
+func TestMissingConfigStillWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, false)
+	o.CfgErr = fmt.Errorf("read config: %w", fs.ErrNotExist)
+
+	r := find(Run(context.Background(), o), "configuration")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn when there is simply no config", r.Status)
 	}
 }

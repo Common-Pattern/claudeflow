@@ -9,7 +9,9 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,10 +108,19 @@ type Options struct {
 	Cfg config.Config
 	// HaveConfig distinguishes a zero Cfg from a real one.
 	HaveConfig bool
+	// CfgErr is why the configuration did not load, when it did not. A parse
+	// error reported as "no config file found" sends the reader looking for a
+	// missing file that is right there.
+	CfgErr error
 	// Run executes commands. Nil means ExecRunner.
 	Run Runner
 	// Look reports a binary's path. Nil means exec.LookPath.
 	Look func(string) (string, error)
+	// Version is claudeflow's own version, so it can check itself.
+	Version string
+	// Latest reports a project's newest release. Nil skips every lag check,
+	// which is what an offline host wants.
+	Latest Latest
 }
 
 func (o Options) run() Runner {
@@ -129,21 +140,118 @@ func (o Options) look() func(string) (string, error) {
 // Run performs every check and returns the report.
 func Run(ctx context.Context, o Options) Report {
 	var r Report
+	r = append(r, checkSelf(ctx, o))
 	r = append(r, checkGit(ctx, o), checkGitIdentity(ctx, o), checkGH(ctx, o), checkGHAuth(ctx, o))
 	if o.HaveConfig {
 		r = append(r, checkRepoAccess(ctx, o))
 	}
-	r = append(r, checkAgent(ctx, o), checkCompose(ctx, o))
+	r = append(r, checkAgent(ctx, o), checkAgentUpdates(ctx, o), checkCompose(ctx, o))
 	if o.HaveConfig {
 		r = append(r, checkComposeFile(ctx, o), checkStateDir(o), checkCheckout(ctx, o))
 	} else {
-		r = append(r, Result{
+		r = append(r, configFault(o))
+	}
+	return r
+}
+
+// checkSelf reports claudeflow's own version against its latest release.
+//
+// A supervisor that is behind is the one failure nobody goes looking for: it
+// runs, it looks healthy, and it carries whatever was wrong with the build it
+// is on. This host ran a binary for a day after the fix for its own thrashing
+// had shipped.
+// configFault says why there is no configuration to check against.
+func configFault(o Options) Result {
+	if o.CfgErr == nil {
+		return Result{
 			Name: "configuration", Status: Warn,
 			Detail: "no config file found",
 			Fix:    "run from a directory with claudeflow.yaml, or pass -c <path>, to check the rest",
-		})
+		}
 	}
-	return r
+	if errors.Is(o.CfgErr, fs.ErrNotExist) {
+		return Result{
+			Name: "configuration", Status: Warn,
+			Detail: "no config file found",
+			Fix:    "run from a directory with claudeflow.yaml, or pass -c <path>, to check the rest",
+		}
+	}
+	// A config that exists and will not load stops every run, so it is a
+	// failure rather than a warning.
+	return Result{
+		Name: "configuration", Status: Fail,
+		Detail: firstLine(o.CfgErr.Error()),
+		Fix:    strings.TrimSpace(strings.TrimPrefix(o.CfgErr.Error(), firstLine(o.CfgErr.Error()))),
+	}
+}
+
+func checkSelf(ctx context.Context, o Options) Result {
+	v := o.Version
+	if v == "" || v == "dev" {
+		return Result{
+			"claudeflow", Warn, "development build",
+			"a release binary reports its version and can be checked against the latest",
+		}
+	}
+	return judge(ctx, o, Result{"claudeflow", OK, v, ""}, v, upstreamSelf)
+}
+
+// checkAgentUpdates asks the agent CLI whether it keeps itself current.
+//
+// claudeflow deliberately does not update the agent: the CLI has its own
+// updater, and a supervisor that reinstalls a tool mid-flight is a worse idea
+// than one that says the updater is off. But an agent CLI that never moves is a
+// slow problem — it pins the model alias, the skills and the bug fixes to
+// whatever was installed once.
+//
+// The question is put to `claude doctor`, which answers it directly. Nothing
+// here reads the CLI's own state files: those are internal, and a doctor that
+// depends on another tool's internals is wrong the moment that tool changes.
+func checkAgentUpdates(ctx context.Context, o Options) Result {
+	cmd := o.Cfg.Agent.Command
+	if cmd == "" {
+		cmd = "claude"
+	}
+	if _, err := o.look()(cmd); err != nil {
+		// checkAgent has already failed this; do not say it twice.
+		return Result{"agent updates", Warn, "cannot ask " + cmd, "install the agent CLI"}
+	}
+	out, err := o.run()(ctx, cmd, "doctor")
+	if err != nil {
+		return Result{
+			"agent updates", Warn, "could not ask " + cmd + " about updates",
+			"run: " + cmd + " doctor",
+		}
+	}
+	state, ok := field(out, "Auto-updates:")
+	if !ok {
+		return Result{
+			"agent updates", Warn, "could not read the update setting",
+			"run: " + cmd + " doctor",
+		}
+	}
+	detail := state
+	if channel, ok := field(out, "Auto-update channel:"); ok {
+		detail += " (" + channel + " channel)"
+	}
+	if strings.HasPrefix(strings.ToLower(state), "enabled") {
+		return Result{"agent updates", OK, detail, ""}
+	}
+	return Result{
+		"agent updates", Warn, detail,
+		"the agent CLI will not update itself; unset DISABLE_AUTOUPDATER, or upgrade it on a schedule of your own",
+	}
+}
+
+// field reads a "Label: value" line out of a tool's report.
+func field(out, label string) (string, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(stripANSI(line))
+		if v, ok := strings.CutPrefix(line, label); ok {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
 }
 
 func checkGit(ctx context.Context, o Options) Result {
@@ -155,6 +263,8 @@ func checkGit(ctx context.Context, o Options) Result {
 	if err != nil {
 		return Result{"git", Fail, "found but would not run: " + path, err.Error()}
 	}
+	// No lag check: git.git publishes tags, not GitHub releases, and every
+	// host installs git from its distribution anyway.
 	return Result{"git", OK, out, ""}
 }
 
@@ -183,7 +293,8 @@ func checkGH(ctx context.Context, o Options) Result {
 	if err != nil {
 		return Result{"gh", Fail, "found but would not run", err.Error()}
 	}
-	return Result{"gh", OK, firstLine(out), ""}
+	line := firstLine(out)
+	return judge(ctx, o, Result{"gh", OK, line, ""}, line, upstreamGH)
 }
 
 // checkGHAuth matters more than the usual "is it installed" check: claudeflow
@@ -257,7 +368,9 @@ func checkCompose(ctx context.Context, o Options) Result {
 			"check compose.bin and compose.env in the configuration",
 		}
 	}
-	return Result{"compose", OK, fmt.Sprintf("%s — %s", strings.Join(bin, " "), versionLine(out)), ""}
+	line := versionLine(out)
+	r := Result{"compose", OK, fmt.Sprintf("%s — %s", strings.Join(bin, " "), line), ""}
+	return note(ctx, o, r, line, composeUpstream(out))
 }
 
 func checkComposeFile(ctx context.Context, o Options) Result {

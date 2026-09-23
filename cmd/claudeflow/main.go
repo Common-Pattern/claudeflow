@@ -87,7 +87,7 @@ func run() error {
 	// is a useful question when the config is the thing that is wrong.
 	cfg, cfgErr := loadConfig(*cfgPath)
 	if cmd == "doctor" {
-		return runDoctor(cfg, cfgErr == nil)
+		return runDoctor(cfg, cfgErr)
 	}
 	if cfgErr != nil {
 		return cfgErr
@@ -143,11 +143,18 @@ func run() error {
 
 // runDoctor reports on the host and exits non-zero if anything would stop a
 // run, so it is usable as a precondition in a script.
-func runDoctor(cfg config.Config, haveConfig bool) error {
+func runDoctor(cfg config.Config, cfgErr error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	report := doctor.Run(ctx, doctor.Options{Cfg: cfg, HaveConfig: haveConfig})
+	report := doctor.Run(ctx, doctor.Options{
+		Cfg: cfg, HaveConfig: cfgErr == nil, CfgErr: cfgErr,
+		Version: version,
+		// Version lookups go through gh, which is already a dependency and
+		// already holds the credentials. An offline host gets "could not
+		// check" rather than a failure.
+		Latest: doctor.GHLatest(doctor.ExecRunner),
+	})
 	fmt.Print(report)
 	if report.Failed() {
 		return errors.New("doctor found problems that would stop a run")

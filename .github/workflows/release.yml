@@ -9,8 +9,16 @@ permissions:
   contents: write
 
 jobs:
+  # The same checks CI runs, against the tagged commit. A tag is pushed by
+  # hand, often minutes after the commit it names, and nothing else stood
+  # between a red build and a published release.
+  test:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+
   goreleaser:
     name: GoReleaser
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out

@@ -268,3 +268,53 @@ func TestIsQueued(t *testing.T) {
 		}
 	}
 }
+
+// A key the tool does not read is a mistake, not a comment. A lenient parser
+// accepts a typo, a key under the wrong block, and a setting left behind by a
+// version that stopped reading it — and in each case the operator has written
+// down an intention the tool silently does not hold.
+func TestUnknownFieldIsRejected(t *testing.T) {
+	raw := []byte(`
+repo: acme/widgets
+user: alice
+compose:
+  file: compose.yaml
+agent:
+  autoUpdate: true
+`)
+	_, err := Parse(raw, t.TempDir())
+	if err == nil {
+		t.Fatal("Parse accepted a key no version of the tool reads")
+	}
+	if !strings.Contains(err.Error(), "autoUpdate") {
+		t.Errorf("err = %v, want it to name the offending key", err)
+	}
+}
+
+// paths.state is relative to the checkout, not to whatever directory the
+// process happens to be in: `claudeflow -c ../other/claudeflow.yaml status`
+// otherwise read an empty state directory — no runs, every issue free to
+// dispatch again — and created a stray one where it stood.
+func TestRelativeStateResolvesAgainstRoot(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`
+repo: acme/widgets
+user: alice
+compose:
+  file: compose.yaml
+paths:
+  root: .
+  state: .claudeflow
+`)
+	cfg, err := Parse(raw, dir)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := filepath.Join(cfg.Paths.Root, ".claudeflow")
+	if cfg.Paths.State != want {
+		t.Errorf("state = %q, want %q", cfg.Paths.State, want)
+	}
+	if cfg.Paths.Worktrees != filepath.Join(want, "worktrees") {
+		t.Errorf("worktrees = %q, want it under the state directory", cfg.Paths.Worktrees)
+	}
+}
