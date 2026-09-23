@@ -31,6 +31,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 	"github.com/Common-Pattern/claudeflow/internal/tick"
+	"github.com/Common-Pattern/claudeflow/internal/transcripts"
 )
 
 // Set by the linker at release time; see .goreleaser.yaml.
@@ -103,8 +104,6 @@ func run() error {
 	if cfgErr != nil {
 		return cfgErr
 	}
-	err := error(nil)
-	_ = err
 	st, err := state.Open(cfg.Paths.State)
 	if err != nil {
 		return err
@@ -259,6 +258,9 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 	}
 
 	e := engine(cfg, st)
+	if cfg.Transcripts.Enabled() {
+		go serveTranscripts(ctx, cfg, st)
+	}
 	logf("claudeflow %s supervising %s every %s", version, cfg.Repo, *interval)
 
 	// Tick immediately rather than waiting out the first interval: a restart
@@ -272,6 +274,38 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 			logf("shutting down; live runs are left running")
 			return nil
 		case <-time.After(*interval):
+		}
+	}
+}
+
+// serveTranscripts runs the transcript server alongside the supervisor,
+// retrying a listen that fails.
+//
+// It retries rather than exiting because the address is usually an interface
+// this process does not own: on a Tailscale host the unit can be ready before
+// tailscaled has assigned the address, and the bind fails with "cannot assign
+// requested address" for the few seconds until it has. Taking the supervisor
+// down over that would stop the runs to protect the log viewer.
+func serveTranscripts(ctx context.Context, cfg config.Config, st *state.Store) {
+	allow, err := cfg.Transcripts.Prefixes()
+	if err != nil {
+		// Validation already rejected this; reaching here means the config
+		// changed underneath, and serving nothing is the safe reading.
+		logf("transcripts: %v", err)
+		return
+	}
+	s := transcripts.Server{
+		Dir: st.LogDir(), Addr: cfg.Transcripts.Addr(),
+		Allow: allow, Repo: cfg.Repo, Log: logf,
+	}
+	for {
+		if err := s.Serve(ctx); err != nil {
+			logf("%v; retrying in 30s", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
 		}
 	}
 }

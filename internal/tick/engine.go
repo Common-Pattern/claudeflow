@@ -36,6 +36,23 @@ func (e Engine) logf(format string, args ...any) {
 	}
 }
 
+// transcript renders a run's log for a comment: a link where transcripts are
+// served, and the path otherwise.
+//
+// The path is kept in both cases. It is the only form that still means
+// something once the server is off, the retention window has passed, or the
+// reader is on the host rather than the network — and a link without it sends
+// someone hunting for a file they are standing on.
+func (e Engine) transcript(logPath string) string {
+	if logPath == "" {
+		return "_none_"
+	}
+	if url := e.Cfg.Transcripts.URL(logPath); url != "" {
+		return fmt.Sprintf("%s (`%s` on the host)", url, logPath)
+	}
+	return fmt.Sprintf("`%s`", logPath)
+}
+
 func (e Engine) now() time.Time {
 	if e.Now != nil {
 		return e.Now()
@@ -293,8 +310,8 @@ func (e Engine) resolveAbandoned(ctx context.Context, r state.Run) error {
 		return e.Client.EditLabels(ctx, r.Ref, nil, []string{e.Cfg.Labels.Working})
 	}
 
-	body := fmt.Sprintf("The unattended run exited without finishing.\n\n- Transcript: `%s`\n\nComment here, or re-apply `%s`, to try again.",
-		r.Log, e.Cfg.Labels.Queued)
+	body := fmt.Sprintf("The unattended run exited without finishing.\n\n- Transcript: %s\n\nComment here, or re-apply `%s`, to try again.",
+		e.transcript(r.Log), e.Cfg.Labels.Queued)
 	if err := e.Client.Comment(ctx, r.Ref, body); err != nil {
 		e.logf("%s: could not comment: %v", r.ID(), err)
 	}

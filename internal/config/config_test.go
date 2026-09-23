@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -316,5 +317,77 @@ paths:
 	}
 	if cfg.Paths.Worktrees != filepath.Join(want, "worktrees") {
 		t.Errorf("worktrees = %q, want it under the state directory", cfg.Paths.Worktrees)
+	}
+}
+
+// Transcripts are off unless a port is set, and a port with no allow list is
+// refused rather than defaulted: the permissive default is the one mistake
+// that would publish every run's output to whoever could reach the port.
+func TestTranscriptsRequireAnAllowList(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ntranscripts:\n  host: bigone.example.ts.net\n  port: 8787\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "transcripts.allow") {
+		t.Fatalf("err = %v, want a complaint about the missing allow list", err)
+	}
+}
+
+// A host and an allow list with no port is a setting the tool does not hold,
+// which is the whole reason parsing is strict.
+func TestTranscriptsWithoutAPortAreRejected(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ntranscripts:\n  host: bigone.example.ts.net\n  allow: [100.64.0.0/10]\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "transcripts.port") {
+		t.Fatalf("err = %v, want a complaint about the missing port", err)
+	}
+}
+
+func TestTranscriptsRejectAMalformedCIDR(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ntranscripts:\n  host: bigone.example.ts.net\n  port: 8787\n  allow: [100.64.0.0]\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "not a CIDR") {
+		t.Fatalf("err = %v, want a complaint about the CIDR block", err)
+	}
+}
+
+func TestTranscriptsOffByDefault(t *testing.T) {
+	cfg, err := Parse([]byte(minimal), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Transcripts.Enabled() {
+		t.Error("transcripts are on without being asked for")
+	}
+	if url := cfg.Transcripts.URL("/logs/build-1.log"); url != "" {
+		t.Errorf("URL = %q, want none when serving is off", url)
+	}
+}
+
+// The link carries only the base name: what is on disk is never something a
+// reader supplies.
+func TestTranscriptURL(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ntranscripts:\n  host: bigone.example.ts.net\n  port: 8787\n  allow: [100.64.0.0/10, 'fd7a:115c:a1e0::/48']\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := "http://bigone.example.ts.net:8787/build-252-20260922T165737.log"
+	if got := cfg.Transcripts.URL("/home/sj/x/.claudeflow/logs/build-252-20260922T165737.log"); got != want {
+		t.Errorf("URL = %q, want %q", got, want)
+	}
+	if got := cfg.Transcripts.Addr(); got != "bigone.example.ts.net:8787" {
+		t.Errorf("Addr = %q", got)
+	}
+	prefixes, err := cfg.Transcripts.Prefixes()
+	if err != nil || len(prefixes) != 2 {
+		t.Fatalf("Prefixes = %v, %v", prefixes, err)
+	}
+	if !prefixes[0].Contains(netip.MustParseAddr("100.71.59.106")) {
+		t.Error("the tailnet range does not contain a tailnet address")
+	}
+}
+
+// Binding every interface must be asked for explicitly, not reached by leaving
+// a line out: the gap between one private network and every network this
+// machine is on is too large to be a default.
+func TestTranscriptsRequireAHost(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ntranscripts:\n  port: 8787\n  allow: [100.64.0.0/10]\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "transcripts.host") {
+		t.Fatalf("err = %v, want a complaint about the missing host", err)
 	}
 }

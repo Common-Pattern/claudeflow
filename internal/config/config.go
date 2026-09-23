@@ -12,8 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +41,10 @@ type Config struct {
 	Hooks    Hooks    `yaml:"hooks"`
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
+
+	// Transcripts optionally serves run logs over HTTP, so that a comment can
+	// link to one instead of naming a path on a machine the reader is not on.
+	Transcripts Transcripts `yaml:"transcripts"`
 
 	// RequiredChecks must be present and green before a pull request is
 	// merged. An absent check counts as not passed, which is what stops a
@@ -264,6 +272,78 @@ type Paths struct {
 	Worktrees string `yaml:"worktrees"`
 }
 
+// Transcripts configures the read-only HTTP server that publishes run logs.
+//
+// A failed run used to be reported as a path — "Transcript:
+// /home/sj/.../build-252.log" — which is only actionable to someone already
+// logged in to the host that produced it. Serving the same file over a private
+// network turns that into a link, and the transcript stays where it already is
+// rather than being copied anywhere.
+//
+// It is off unless Port is set, because publishing a transcript is a decision:
+// they carry whatever the agent printed, which is the project's code, its test
+// output and sometimes production-derived data.
+type Transcripts struct {
+	// Host is the address to bind and the hostname links are built from.
+	//
+	// One field for both on purpose: a separate bind address and link host
+	// drift, and the failure — a link to a host nothing is listening on — looks
+	// like the server being down. Use a name that resolves to the same address
+	// everywhere, which for a Tailscale host means the full MagicDNS name and
+	// not the short hostname: /etc/hosts usually maps the short one to
+	// 127.0.1.1, so binding to it would listen on loopback while the link sent
+	// readers to the tailnet address.
+	//
+	// Required whenever Port is set. An empty host binds every interface, and
+	// the difference between "reachable on one private network" and "reachable
+	// on every network this machine is attached to" is too large to be the
+	// consequence of omitting a line. Bind the interface you mean: a host that
+	// should only answer over a tailnet binds its tailnet address, and the
+	// allow list is then the second line rather than the only one.
+	Host string `yaml:"host"`
+	// Port is the TCP port. Zero disables serving entirely.
+	Port int `yaml:"port"`
+	// Allow lists the CIDR blocks permitted to read. A request from anywhere
+	// else is refused without touching the disk.
+	//
+	// Required whenever Port is set. There is no default, and in particular no
+	// permissive one: a default that served the transcript of every run to
+	// whoever asked would be a poor thing to arrive at by leaving a field out.
+	Allow []string `yaml:"allow"`
+}
+
+// Enabled reports whether transcripts should be served.
+func (t Transcripts) Enabled() bool { return t.Port > 0 }
+
+// Addr is the listen address.
+func (t Transcripts) Addr() string {
+	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
+// URL returns where a transcript can be read, or "" when serving is off.
+//
+// Only the base name goes into the URL: the server resolves it against its own
+// log directory, so the path on disk is never something a reader supplies.
+func (t Transcripts) URL(logPath string) string {
+	if !t.Enabled() || logPath == "" {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(t.Host, strconv.Itoa(t.Port)) + "/" + url.PathEscape(filepath.Base(logPath))
+}
+
+// Prefixes parses Allow.
+func (t Transcripts) Prefixes() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(t.Allow))
+	for _, raw := range t.Allow {
+		p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("transcripts.allow: %q is not a CIDR block: %w", raw, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // Default returns a configuration with every optional field populated. Only
 // Repo, User and Paths.Root have no sensible default.
 func Default() Config {
@@ -420,6 +500,24 @@ func (c Config) Validate() error {
 	}
 	if c.Paths.Root == "" {
 		return fmt.Errorf("%w: paths.root is required", ErrInvalid)
+	}
+	if c.Transcripts.Enabled() {
+		if c.Transcripts.Host == "" {
+			return fmt.Errorf("%w: transcripts.host is required — an empty host binds every interface, "+
+				"which is not something to arrive at by leaving a field out", ErrInvalid)
+		}
+		if len(c.Transcripts.Allow) == 0 {
+			return fmt.Errorf("%w: transcripts.allow must name at least one CIDR block — "+
+				"transcripts carry whatever a run printed, so there is no default that serves them to everyone", ErrInvalid)
+		}
+		if _, err := c.Transcripts.Prefixes(); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+	} else if len(c.Transcripts.Allow) > 0 || c.Transcripts.Host != "" {
+		// Configured but for nothing: the operator wrote down an intention the
+		// tool does not hold, which is the failure strict parsing exists to
+		// prevent and which an unset port would otherwise reintroduce.
+		return fmt.Errorf("%w: transcripts.host and transcripts.allow have no effect without transcripts.port", ErrInvalid)
 	}
 	return nil
 }

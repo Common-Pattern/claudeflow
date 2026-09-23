@@ -230,4 +230,22 @@ agent:
 paths:
   root: .
   state: .claudeflow
+
+# Serve run transcripts over HTTP, so a comment can link to what a run printed
+# instead of naming a path on this host. Off unless port is set.
+#
+# host is both the bind address and the hostname links are built from — use a
+# name that resolves to the same address everywhere. On a Tailscale host that
+# means the full MagicDNS name: the short hostname is usually in /etc/hosts as
+# 127.0.1.1, so the server would bind loopback while the links it hands out go
+# to the tailnet address. ` + "`claudeflow doctor`" + ` checks for exactly that.
+#
+# host and allow are both required. The host is the interface to bind, so bind
+# the one you mean: a tailnet address answers only over the tailnet, and the
+# allow list is then the second line rather than the only one. Transcripts carry
+# whatever the run printed.
+# transcripts:
+#   host: HOST.your-tailnet.ts.net
+#   port: 8787
+#   allow: [100.64.0.0/10, 'fd7a:115c:a1e0::/48']
 `

@@ -285,6 +285,50 @@ paths:
   # worktrees: /var/lib/claudeflow/worktrees
 ```
 
+### Serving transcripts
+
+A run that ends badly comments on its issue. Without this it names a path —
+`/home/sj/.../.claudeflow/logs/build-252-20260922T165737.log` — which is only
+actionable to someone already logged in to the host that produced it.
+
+Setting a port makes `serve` publish the log directory read-only over HTTP, and
+the comment carries a link instead. Nothing is copied anywhere: the file is
+served where housekeeping already manages it, so the retention window is the
+one you already set. The alternatives all involve copying — a gist is unlisted
+rather than private, and a branch puts run output into the project's history.
+
+```yaml
+transcripts:
+  host: bigone.your-tailnet.ts.net
+  port: 8787
+  allow: [100.64.0.0/10, 'fd7a:115c:a1e0::/48']
+```
+
+- **`allow` is required.** Transcripts hold whatever the run printed: the
+  project's code, its test output, sometimes production-derived data. There is
+  no default, and deliberately no permissive one — serving every run's output to
+  whoever asked is not something to arrive at by leaving a field out.
+- **`host` is both the bind address and the hostname links are built from.**
+  One field, because two drift, and the failure then looks like the server being
+  down. It is required: an empty host binds every interface, and the difference
+  between "reachable on one private network" and "reachable on every network this
+  machine is attached to" is too large to be the consequence of omitting a line.
+  Bind the interface you mean — a host that should only answer over a tailnet
+  binds its tailnet address, and `allow` is then the second line of defence
+  rather than the only one.
+- **Use a fully qualified name.** On a Tailscale host the short hostname is
+  usually in `/etc/hosts` as `127.0.1.1`, so the server would bind loopback while
+  the links it hands out resolve, on another device, to the tailnet address.
+  Nothing errors — the server is up, the links are well-formed, and every one of
+  them times out. `claudeflow doctor` resolves the name and compares it to
+  `allow` precisely to catch this.
+
+The server has two routes, a listing and a file. It refuses anything outside
+`allow` by the connection's own peer address; `X-Forwarded-For` is a claim by
+the caller and is not trusted, because nothing here sits behind a proxy that
+could make it a fact. It serves only `*.log` basenames from the log directory,
+as `text/plain` with `nosniff`.
+
 ### The Compose file
 
 Every project ships one. claudeflow runs it per slot under `<projectPrefix>-<slot>`,

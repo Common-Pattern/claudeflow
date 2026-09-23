@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,6 +126,8 @@ type Options struct {
 	// Latest reports a project's newest release. Nil skips every lag check,
 	// which is what an offline host wants.
 	Latest Latest
+	// Resolve looks up a hostname. Nil means the system resolver.
+	Resolve func(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
 func (o Options) run() Runner {
@@ -153,6 +156,7 @@ func Run(ctx context.Context, o Options) Report {
 	r = append(r, checkAgent(ctx, o), checkAgentUpdates(ctx, o), checkCompose(ctx, o))
 	if o.HaveConfig {
 		r = append(r, checkComposeFile(ctx, o), checkStateDir(o), checkCheckout(ctx, o))
+		r = append(r, checkTranscripts(ctx, o))
 	}
 	return r
 }
