@@ -20,6 +20,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 )
 
 // Status is how a check came out.
@@ -112,6 +113,9 @@ type Options struct {
 	// error reported as "no config file found" sends the reader looking for a
 	// missing file that is right there.
 	CfgErr error
+	// CfgPath is the file the configuration was read from, named in the
+	// report so it is clear which one was checked.
+	CfgPath string
 	// Run executes commands. Nil means ExecRunner.
 	Run Runner
 	// Look reports a binary's path. Nil means exec.LookPath.
@@ -142,14 +146,13 @@ func Run(ctx context.Context, o Options) Report {
 	var r Report
 	r = append(r, checkSelf(ctx, o))
 	r = append(r, checkGit(ctx, o), checkGitIdentity(ctx, o), checkGH(ctx, o), checkGHAuth(ctx, o))
+	r = append(r, checkConfig(o))
 	if o.HaveConfig {
 		r = append(r, checkRepoAccess(ctx, o))
 	}
 	r = append(r, checkAgent(ctx, o), checkAgentUpdates(ctx, o), checkCompose(ctx, o))
 	if o.HaveConfig {
 		r = append(r, checkComposeFile(ctx, o), checkStateDir(o), checkCheckout(ctx, o))
-	} else {
-		r = append(r, configFault(o))
 	}
 	return r
 }
@@ -160,28 +163,48 @@ func Run(ctx context.Context, o Options) Report {
 // runs, it looks healthy, and it carries whatever was wrong with the build it
 // is on. This host ran a binary for a day after the fix for its own thrashing
 // had shipped.
-// configFault says why there is no configuration to check against.
-func configFault(o Options) Result {
-	if o.CfgErr == nil {
+// checkConfig reports on the configuration itself: that there is one, which
+// one, and that it parsed and validated.
+//
+// Loading it is the check. The parser rejects unknown keys and Validate
+// refuses a config that would fail later — an empty user, a label used for two
+// states, more builds than there are slots — so a configuration that loaded is
+// one every other check can be run against.
+func checkConfig(o Options) Result {
+	if o.HaveConfig {
+		path := o.CfgPath
+		if path == "" {
+			path = "(supplied)"
+		}
+		// A scaffolded configuration parses and validates while still saying
+		// OWNER/NAME, because that is a well-formed owner/name. Saying so here
+		// beats the reader meeting it three rows down as a repository that
+		// cannot be read.
+		if unfilled := scaffold.Unfilled(o.Cfg.Repo, o.Cfg.User); len(unfilled) > 0 {
+			return Result{
+				"configuration", Warn,
+				fmt.Sprintf("%s — still to fill in: %s", path, strings.Join(unfilled, ", ")),
+				"edit " + path,
+			}
+		}
+		return Result{"configuration", OK, path + " — parsed and valid", ""}
+	}
+	if o.CfgErr == nil || errors.Is(o.CfgErr, fs.ErrNotExist) {
+		// No configuration is not a fault on its own: `doctor` in a fresh
+		// checkout is a reasonable thing to run, and everything above this
+		// line still answers.
 		return Result{
 			Name: "configuration", Status: Warn,
-			Detail: "no config file found",
-			Fix:    "run from a directory with claudeflow.yaml, or pass -c <path>, to check the rest",
+			Detail: "none found",
+			Fix:    "run: claudeflow init — or pass -c <path> to check an existing one",
 		}
 	}
-	if errors.Is(o.CfgErr, fs.ErrNotExist) {
-		return Result{
-			Name: "configuration", Status: Warn,
-			Detail: "no config file found",
-			Fix:    "run from a directory with claudeflow.yaml, or pass -c <path>, to check the rest",
-		}
-	}
-	// A config that exists and will not load stops every run, so it is a
-	// failure rather than a warning.
+	// A configuration that exists and will not load stops every run.
+	head := firstLine(o.CfgErr.Error())
 	return Result{
 		Name: "configuration", Status: Fail,
-		Detail: firstLine(o.CfgErr.Error()),
-		Fix:    strings.TrimSpace(strings.TrimPrefix(o.CfgErr.Error(), firstLine(o.CfgErr.Error()))),
+		Detail: head,
+		Fix:    strings.TrimSpace(strings.TrimPrefix(o.CfgErr.Error(), head)),
 	}
 }
 

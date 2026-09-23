@@ -10,10 +10,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/housekeep"
 	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
+	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 	"github.com/Common-Pattern/claudeflow/internal/tick"
 )
@@ -51,6 +54,7 @@ Commands:
   stop           pause, then stop every live run
   land <pr>      merge a green pull request and sync the checkout
   housekeep      reclaim landed worktrees now
+  init           write a starter claudeflow.yaml in this directory
   doctor         check dependencies, authentication and configuration
   labels         create or update the labels in the repository
   version        print version information
@@ -83,11 +87,18 @@ func run() error {
 		return nil
 	}
 
+	// init comes before the config is loaded, for the obvious reason.
+	if cmd == "init" {
+		// Detection is a couple of short commands, each bounded by the
+		// runner's own timeout; the signal context is not set up yet.
+		return runInit(context.Background())
+	}
+
 	// doctor runs before the config is required: "can this host run anything"
 	// is a useful question when the config is the thing that is wrong.
-	cfg, cfgErr := loadConfig(*cfgPath)
+	cfg, cfgFile, cfgErr := loadConfig(*cfgPath)
 	if cmd == "doctor" {
-		return runDoctor(cfg, cfgErr)
+		return runDoctor(cfg, cfgFile, cfgErr)
 	}
 	if cfgErr != nil {
 		return cfgErr
@@ -141,14 +152,45 @@ func run() error {
 	}
 }
 
+// runInit writes a starter configuration, filling in what the checkout and gh
+// already know.
+func runInit(ctx context.Context) error {
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	facts := scaffold.Detect(ctx, scaffold.Runner(doctor.ExecRunner), dir)
+	path, err := scaffold.Write(dir, facts)
+	if err != nil {
+		if errors.Is(err, scaffold.ErrExists) {
+			return fmt.Errorf("%w — delete or move it to start again", err)
+		}
+		return err
+	}
+
+	fmt.Printf("wrote %s\n", path)
+	if missing := facts.Missing(); len(missing) > 0 {
+		fmt.Printf("\nfill in: %s\n", strings.Join(missing, ", "))
+	}
+	fmt.Print(`
+Then, in order:
+
+  1. write the Compose file it names, describing the environment a run gets
+  2. claudeflow labels    # create the label set in the repository
+  3. claudeflow doctor    # check the host, the config and the versions
+  4. claudeflow once      # one tick, in the foreground
+`)
+	return nil
+}
+
 // runDoctor reports on the host and exits non-zero if anything would stop a
 // run, so it is usable as a precondition in a script.
-func runDoctor(cfg config.Config, cfgErr error) error {
+func runDoctor(cfg config.Config, cfgFile string, cfgErr error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	report := doctor.Run(ctx, doctor.Options{
-		Cfg: cfg, HaveConfig: cfgErr == nil, CfgErr: cfgErr,
+		Cfg: cfg, HaveConfig: cfgErr == nil, CfgErr: cfgErr, CfgPath: cfgFile,
 		Version: version,
 		// Version lookups go through gh, which is already a dependency and
 		// already holds the credentials. An offline host gets "could not
@@ -162,16 +204,25 @@ func runDoctor(cfg config.Config, cfgErr error) error {
 	return nil
 }
 
-func loadConfig(path string) (config.Config, error) {
+// loadConfig returns the configuration and the path it came from.
+//
+// The path is part of the answer: `doctor` names the file it checked, so that
+// a config edited in one place and read from another — the usual shape of "but
+// I changed that" — is visible rather than inferred.
+func loadConfig(path string) (config.Config, string, error) {
 	if path != "" {
-		return config.Load(path)
+		cfg, err := config.Load(path)
+		return cfg, path, err
 	}
 	for _, candidate := range []string{"claudeflow.yaml", "claudeflow.yml", ".claudeflow.yaml"} {
 		if _, err := os.Stat(candidate); err == nil {
-			return config.Load(candidate)
+			cfg, err := config.Load(candidate)
+			return cfg, candidate, err
 		}
 	}
-	return config.Config{}, errors.New("no config file found; pass -c or add claudeflow.yaml")
+	// Wraps fs.ErrNotExist so callers can tell "there is none" from "there is
+	// one and it is wrong" — a distinction doctor reports differently.
+	return config.Config{}, "", fmt.Errorf("no config file found; run claudeflow init, or pass -c: %w", fs.ErrNotExist)
 }
 
 func engine(cfg config.Config, st *state.Store) tick.Engine {

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 )
 
 // fake builds Options whose tooling is entirely scripted, so the checks can be
@@ -454,5 +455,40 @@ func TestMissingConfigStillWarns(t *testing.T) {
 	r := find(Run(context.Background(), o), "configuration")
 	if r.Status != Warn {
 		t.Errorf("status = %s, want warn when there is simply no config", r.Status)
+	}
+}
+
+// The configuration is itself a check: that there is one, which one, and that
+// it parsed and validated. A report that never mentions it leaves the reader
+// guessing which file was read.
+func TestValidConfigIsReported(t *testing.T) {
+	f, cfg := healthy(t)
+	o := f.options(cfg, true)
+	o.CfgPath = "claudeflow.yaml"
+
+	r := find(Run(context.Background(), o), "configuration")
+	if r.Status != OK {
+		t.Errorf("status = %s, want ok for a config that loaded", r.Status)
+	}
+	if !strings.Contains(r.Detail, "claudeflow.yaml") || !strings.Contains(r.Detail, "valid") {
+		t.Errorf("detail = %q, want the path and that it is valid", r.Detail)
+	}
+}
+
+// A scaffolded config parses and validates while still saying OWNER/NAME,
+// which is a well-formed owner/name. Saying so at the configuration beats the
+// reader meeting it further down as a repository that cannot be read.
+func TestUnfilledScaffoldWarns(t *testing.T) {
+	f, cfg := healthy(t)
+	cfg.Repo = scaffold.PlaceholderRepo
+	o := f.options(cfg, true)
+	o.CfgPath = "claudeflow.yaml"
+
+	r := find(Run(context.Background(), o), "configuration")
+	if r.Status != Warn {
+		t.Errorf("status = %s, want warn while a placeholder is unfilled", r.Status)
+	}
+	if !strings.Contains(r.Detail, "repo") {
+		t.Errorf("detail = %q, want it to name what is left to fill in", r.Detail)
 	}
 }

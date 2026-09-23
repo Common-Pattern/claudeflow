@@ -77,6 +77,10 @@ on and warns when they are not. An agent CLI that never moves pins the model
 the `opus` alias resolves to, its skills, and its bug fixes to whatever was
 installed once.
 
+`doctor` reports on the configuration itself too: which file it read, that it
+parsed, and that it validated. A scaffolded config that still says `OWNER/NAME`
+is a warning rather than a pass, because it is well-formed and wrong.
+
 ### The configuration is parsed strictly
 
 A key claudeflow does not read is an error, not a comment. `autoupdate` for
@@ -316,6 +320,7 @@ checkout left running, which claudeflow's own records cannot.
 
 | Command | What it does |
 | --- | --- |
+| `claudeflow init` | write a starter `claudeflow.yaml` here, filling in what the checkout and `gh` already know. Refuses to overwrite one |
 | `claudeflow serve` | the supervisor: ticks on a loop, dispatches runs, reaps finished ones |
 | `claudeflow once` | run a single tick and exit. Use this to try a configuration before running `serve` |
 | `claudeflow status` | what is live, which slots are held, whether dispatch is paused |
@@ -331,7 +336,9 @@ checkout left running, which claudeflow's own records cannot.
 A first run:
 
 ```sh
-claudeflow doctor          # dependencies, auth, config
+claudeflow init            # writes claudeflow.yaml; fill in what it could not detect
+                           # then write the Compose file it names
+claudeflow doctor          # dependencies, auth, versions, config
 claudeflow labels          # create the label set in the repo
 gh issue edit 412 --add-label claude
 claudeflow once            # one tick, in the foreground
