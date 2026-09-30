@@ -40,6 +40,12 @@ func (w Watcher) Requeue(ctx context.Context) ([]int, error) {
 
 	var requeued []int
 	for _, issue := range touched {
+		// An issue whose pull request is waiting for review is watched by the
+		// review pass, which reads the issue thread too and turns a reply into
+		// a revision of that pull request rather than a fresh build.
+		if w.Cfg.HumanMerges() && issue.HasLabel(l.Review) {
+			continue
+		}
 		latest, err := w.Client.LatestCommentBy(ctx, forge.TargetIssue, issue.Number, w.Cfg.User)
 		if err != nil {
 			return nil, fmt.Errorf("read comments on #%d: %w", issue.Number, err)

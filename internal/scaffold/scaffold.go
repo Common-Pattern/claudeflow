@@ -170,6 +170,10 @@ branches:
   # integration: preview
   prefix: claude/
 
+# Who merges a green pull request: auto (claudeflow lands it) or human (it waits
+# for you; your comments and reviews on it start a revision on the same branch).
+merge: auto
+
 limits:
   # How many runs may be in flight. Each build holds a slot, a container stack
   # and a model session, and this box has other work to do.

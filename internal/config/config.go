@@ -52,7 +52,25 @@ type Config struct {
 	//
 	// Empty means "every check the pull request reports, and at least one".
 	RequiredChecks []string `yaml:"requiredChecks"`
+
+	// Merge says who merges an issue's pull request once its checks are green:
+	// MergeAuto for claudeflow, MergeHuman for the operator.
+	Merge string `yaml:"merge"`
 }
+
+// Merge modes.
+const (
+	// MergeAuto lands a green pull request on the integration branch without
+	// waiting for anyone.
+	MergeAuto = "auto"
+	// MergeHuman leaves a green pull request open for the operator. Their
+	// comments and reviews on it start a revision run on the same branch, and
+	// the issue is finished when they merge it.
+	MergeHuman = "human"
+)
+
+// HumanMerges reports whether a human merges each pull request.
+func (c Config) HumanMerges() bool { return c.Merge == MergeHuman }
 
 // Compose describes the environment stack a run gets.
 //
@@ -131,18 +149,21 @@ type Labels struct {
 	Question string `yaml:"question"`
 	// Blocked means something broke, as distinct from Question.
 	Blocked string `yaml:"blocked"`
+	// Review means the pull request is green and waiting for the operator to
+	// merge it or ask for changes. Used only when a human merges.
+	Review string `yaml:"review"`
 	// Planning, alongside Queued, inverts the run into conversation only.
 	Planning string `yaml:"planning"`
 }
 
 // All returns every configured label, in a stable order.
 func (l Labels) All() []string {
-	return []string{l.Queued, l.Working, l.Landed, l.Question, l.Blocked, l.Planning}
+	return []string{l.Queued, l.Working, l.Landed, l.Question, l.Blocked, l.Review, l.Planning}
 }
 
 // Resolution returns the labels that end a run, which a re-queue must clear.
 func (l Labels) Resolution() []string {
-	return []string{l.Landed, l.Question, l.Blocked}
+	return []string{l.Landed, l.Question, l.Blocked, l.Review}
 }
 
 // IsQueued reports whether an issue is waiting to be worked: it belongs to the
@@ -354,6 +375,7 @@ func Default() Config {
 			Landed:   "claude:landed",
 			Question: "claude:question",
 			Blocked:  "claude:blocked",
+			Review:   "claude:review",
 			Planning: "claude:planning",
 		},
 		// Integration is deliberately left empty: it is derived from Base after
@@ -373,6 +395,7 @@ func Default() Config {
 		Slots:   Slots{Min: 1, Max: 4},
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
+		Merge:   MergeAuto,
 	}
 }
 
@@ -465,7 +488,8 @@ func (c Config) Validate() error {
 	for name, label := range map[string]string{
 		"queued": c.Labels.Queued, "working": c.Labels.Working,
 		"landed": c.Labels.Landed, "question": c.Labels.Question,
-		"blocked": c.Labels.Blocked, "planning": c.Labels.Planning,
+		"blocked": c.Labels.Blocked, "review": c.Labels.Review,
+		"planning": c.Labels.Planning,
 	} {
 		if label == "" {
 			return fmt.Errorf("%w: labels.%s must not be empty", ErrInvalid, name)
@@ -476,6 +500,9 @@ func (c Config) Validate() error {
 	}
 	if c.Branches.Base == "" {
 		return fmt.Errorf("%w: branches.base is required", ErrInvalid)
+	}
+	if c.Merge != MergeAuto && c.Merge != MergeHuman {
+		return fmt.Errorf("%w: merge must be %q or %q, not %q", ErrInvalid, MergeAuto, MergeHuman, c.Merge)
 	}
 	if c.Slots.Min > c.Slots.Max {
 		return fmt.Errorf("%w: slots.min (%d) exceeds slots.max (%d)", ErrInvalid, c.Slots.Min, c.Slots.Max)

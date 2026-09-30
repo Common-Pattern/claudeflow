@@ -72,8 +72,14 @@ func (e Engine) Once(ctx context.Context) error {
 	if err := e.advanceAwaitingCI(ctx); err != nil {
 		e.logf("advancing checks: %v", err)
 	}
-	if err := DispatchBlocked(e.Store, e.now()); err != nil {
-		e.logf("not dispatching: %v", err)
+	blocked := DispatchBlocked(e.Store, e.now())
+	// Revisions go before new issues for the same reason review runs do: the
+	// operator is waiting on them.
+	if err := e.advanceAwaitingReview(ctx, blocked == nil); err != nil {
+		e.logf("advancing reviews: %v", err)
+	}
+	if blocked != nil {
+		e.logf("not dispatching: %v", blocked)
 		return nil
 	}
 
@@ -185,7 +191,7 @@ func (e Engine) liveRuns() ([]state.Run, error) {
 		// A run waiting on checks has no process by design, but it still owns
 		// its issue: counting only live pids would dispatch a second run on an
 		// issue whose pull request is already open.
-		if r.InPhase(state.PhaseAwaitingCI) || runner.AliveSince(r.PID, r.Started) {
+		if r.InPhase(state.PhaseAwaitingCI) || r.InPhase(state.PhaseAwaitingReview) || runner.AliveSince(r.PID, r.Started) {
 			live = append(live, r)
 		}
 	}
@@ -199,7 +205,7 @@ func (e Engine) Reap(ctx context.Context) error {
 		return err
 	}
 	for _, r := range all {
-		if r.InPhase(state.PhaseAwaitingCI) {
+		if r.InPhase(state.PhaseAwaitingCI) || r.InPhase(state.PhaseAwaitingReview) {
 			// Not this function's business: no process, by design.
 			continue
 		}
@@ -207,6 +213,23 @@ func (e Engine) Reap(ctx context.Context) error {
 			continue
 		}
 		e.logf("%s: run finished", r.ID())
+
+		// A revision whose pull request the operator merged or closed while
+		// it ran has nothing left to wait on. Without this it finds no open
+		// pull request below and reads as a run that died.
+		if e.Cfg.HumanMerges() && r.PR != 0 {
+			if st, err := e.Client.PRState(ctx, r.PR); err == nil && st != forge.PROpen {
+				if r.Kind.HoldsSlot() {
+					if err := e.stack(r.Slot).Down(ctx); err != nil {
+						e.logf("%s: teardown reported a problem: %v", r.ID(), err)
+					}
+				}
+				if _, err := e.settleIfClosed(ctx, r); err != nil {
+					e.logf("%s: %v", r.ID(), err)
+				}
+				continue
+			}
+		}
 
 		// An agent that opened a pull request has done its part. The waiting
 		// is claudeflow's from here, so the run is parked rather than resolved.
@@ -612,11 +635,13 @@ func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {
 		"CLAUDEFLOW_BASE":           e.Cfg.Branches.Base,
 		"CLAUDEFLOW_INTEGRATION":    e.Cfg.Branches.Integration,
 		"CLAUDEFLOW_VERIFY":         e.Cfg.Hooks.Verify,
+		"CLAUDEFLOW_MERGE":          e.Cfg.Merge,
 		"CLAUDEFLOW_LABEL_QUEUED":   l.Queued,
 		"CLAUDEFLOW_LABEL_WORKING":  l.Working,
 		"CLAUDEFLOW_LABEL_LANDED":   l.Landed,
 		"CLAUDEFLOW_LABEL_QUESTION": l.Question,
 		"CLAUDEFLOW_LABEL_BLOCKED":  l.Blocked,
+		"CLAUDEFLOW_LABEL_REVIEW":   l.Review,
 		"CLAUDEFLOW_LABEL_PLANNING": l.Planning,
 	}
 	if s.Kind.HoldsSlot() {

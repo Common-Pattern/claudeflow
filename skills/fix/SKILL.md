@@ -93,7 +93,8 @@ git push origin "$CLAUDEFLOW_BRANCH"
 
 Then comment on issue `$CLAUDEFLOW_ISSUE` saying what failed and what you
 changed, and stop. Do not watch the checks, do not merge, do not touch labels —
-claudeflow is watching and will land it when it is green.
+claudeflow is watching, and when it is green it lands it or, where the operator
+merges (`CLAUDEFLOW_MERGE=human`), hands it to them for review.
 
 If you could not fix it, say what you found and what you think is wrong. Being
 told "this is an infrastructure failure, not the diff" is worth more than

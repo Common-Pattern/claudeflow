@@ -27,6 +27,8 @@ type Fake struct {
 	Bodies map[int]string
 	// PRByBranch maps a head branch to its open pull request.
 	PRByBranch map[string]int
+	// States holds pull request states by number. Absent means open.
+	States map[int]PRState
 
 	// Merged records pull requests merged, in order.
 	Merged []int
@@ -42,7 +44,7 @@ func NewFake() *Fake {
 		Issues: map[int]*Issue{}, Comments: map[int][]string{},
 		LastSpoke: map[string]time.Time{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
-		PRByBranch: map[string]int{},
+		PRByBranch: map[string]int{}, States: map[int]PRState{},
 	}
 }
 
@@ -209,6 +211,19 @@ func (f *Fake) PRHeadSHA(_ context.Context, number int) (string, error) {
 		return "", f.Err
 	}
 	return f.HeadSHA[number], nil
+}
+
+// PRState implements Client.
+func (f *Fake) PRState(_ context.Context, number int) (PRState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return "", f.Err
+	}
+	if s, ok := f.States[number]; ok {
+		return s, nil
+	}
+	return PROpen, nil
 }
 
 // Merge implements Client.

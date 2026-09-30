@@ -22,6 +22,7 @@ Your environment, from claudeflow:
 | `CLAUDEFLOW_BASE` | the branch the integration branch eventually merges into |
 | `CLAUDEFLOW_INTEGRATION` | the branch you land on |
 | `CLAUDEFLOW_VERIFY` | the project's full check command |
+| `CLAUDEFLOW_MERGE` | `auto`: claudeflow merges your green pull request; `human`: the operator reviews and merges it |
 | `CLAUDEFLOW_LABEL_*` | `QUEUED`, `WORKING`, `LANDED`, `QUESTION`, `BLOCKED` |
 
 The project's own agent instructions — `CLAUDE.md`, `AGENTS.md`, or whatever it
@@ -36,8 +37,9 @@ this run the instruction was given in advance: applying the queued label to this
 issue is the instruction to ship it.
 
 That authorises exactly this — your branch, a pull request against the
-integration branch, and merging *that* pull request once CI is green. It
-authorises nothing else. Do not merge the integration branch into the base
+integration branch, and, when `CLAUDEFLOW_MERGE` is `auto`, claudeflow merging
+*that* pull request once CI is green. When it is `human`, the operator reviews
+the pull request and merges it themselves. It authorises nothing else. Do not merge the integration branch into the base
 branch. Do not touch any issue or branch other than this one. Do not push
 directly to the integration branch.
 
@@ -185,7 +187,8 @@ the repository's *default* branch, and this one merges into the integration
 branch. `claudeflow land` reads that line and copies it onto the standing
 integration pull request as `Fixes #<issue>`, which is what actually closes the
 issue when the operator merges. Leave it out and the work ships while the issue
-stays open for someone to close by hand.
+stays open for someone to close by hand. Where the integration branch is the
+default branch, the line closes the issue directly when the pull request merges.
 
 Also include what changed, how it was verified, and any note from step 6.
 
@@ -208,9 +211,18 @@ Comment on the issue with the pull request link and what you changed, then stop.
 
 ## What happens after you stop
 
-claudeflow watches the checks, lands the pull request on green, sets the landed
-label and comments the result on the issue. On red it starts a fix run. After
-three failed attempts it labels the issue blocked and leaves the branch intact.
+claudeflow watches the checks. On red it starts a fix run; after three failed
+attempts it labels the issue blocked and leaves the branch intact. On green:
+
+- **`CLAUDEFLOW_MERGE=auto`**: it lands the pull request, sets the landed label
+  and comments the result on the issue.
+- **`CLAUDEFLOW_MERGE=human`**: it labels the issue for review and tells the
+  operator the pull request is ready. Their comments and reviews start a
+  revision run on this same branch; when they merge, claudeflow sets the landed
+  label.
+
+So write the pull request body for a reader: in `human` mode someone reads it
+before anything merges.
 
 The issue stays open either way. Closing it is the user's, after they have
 looked.

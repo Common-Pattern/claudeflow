@@ -314,6 +314,7 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 	now := time.Now()
 	fmt.Printf("repo:    %s\n", cfg.Repo)
 	fmt.Printf("branch:  %s → %s\n", cfg.Branches.Integration, cfg.Branches.Base)
+	fmt.Printf("merge:   %s\n", cfg.Merge)
 	fmt.Printf("limits:  %d builds, %d planning · slots %d–%d\n",
 		cfg.Limits.MaxBuilds, cfg.Limits.MaxPlanning, cfg.Slots.Min, cfg.Slots.Max)
 
@@ -339,7 +340,12 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 		fmt.Fprintln(w, "KIND\tREF\tSLOT\tPID\tSTATE\tAGE")
 		for _, r := range runs {
 			label := "exited"
-			if runner.AliveSince(r.PID, r.Started) {
+			switch {
+			case r.InPhase(state.PhaseAwaitingCI):
+				label = fmt.Sprintf("checks on #%d", r.PR)
+			case r.InPhase(state.PhaseAwaitingReview):
+				label = fmt.Sprintf("review of #%d", r.PR)
+			case runner.AliveSince(r.PID, r.Started):
 				label = "live"
 			}
 			fmt.Fprintf(w, "%s\t#%d\t%d\t%d\t%s\t%dm\n",
@@ -352,6 +358,7 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 	l := cfg.Labels
 	for _, group := range []struct{ title, label string }{
 		{"waiting on you", l.Question},
+		{"waiting for your review", l.Review},
 		{"in planning", l.Planning},
 		{"queued", l.Queued},
 		{"landed", l.Landed},
@@ -493,6 +500,7 @@ func ensureLabels(ctx context.Context, cfg config.Config) error {
 		{l.Landed, "1a7f37", "Landed on the integration branch; awaiting your check"},
 		{l.Question, "8250df", "The agent asked you something; reply to unblock it"},
 		{l.Blocked, "cf222e", "The agent stopped; something broke. See its comment"},
+		{l.Review, "0969da", "The pull request is green; review and merge it, or comment to revise"},
 		{l.Planning, "0e8a16", "With the queued label: talk it through, write no code"},
 	} {
 		if err := cl.EnsureLabel(ctx, spec.name, spec.color, spec.desc); err != nil {
