@@ -99,7 +99,7 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 	}
 
 	body := fmt.Sprintf("Landed #%d on `%s` as `%s`.", res.PR, e.Cfg.Branches.Integration, short(res.MergedSHA))
-	if len(res.Closes) > 0 {
+	if len(res.Closes) > 0 && res.StandingPR != 0 {
 		body += fmt.Sprintf("\n\nThe standing pull request will close this issue when it merges into `%s`.", e.Cfg.Branches.Base)
 	}
 	return e.finishRun(ctx, r, e.Cfg.Labels.Landed, body)

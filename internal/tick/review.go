@@ -129,7 +129,7 @@ func (e Engine) mergedByHuman(ctx context.Context, r state.Run) error {
 		if err != nil {
 			body += fmt.Sprintf("\n\nThe local checkout could not be brought up to date:\n\n```\n%v\n```", err)
 		}
-		if len(res.Closes) > 0 && !e.Cfg.Branches.SingleBranch() {
+		if len(res.Closes) > 0 && res.StandingPR != 0 {
 			body += fmt.Sprintf("\n\nThe standing pull request will close this issue when it merges into `%s`.", e.Cfg.Branches.Base)
 		}
 	}

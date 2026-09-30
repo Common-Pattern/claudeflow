@@ -154,6 +154,7 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 		return res, fmt.Errorf("%w: %w", ErrMergeRefused, err)
 	}
 	res.Closes = closes
+	l.settleAfterMerge(ctx, &res)
 
 	// The merge happened on the server, so nothing about it touched this
 	// machine. Without the next two steps the local checkout keeps serving
@@ -162,14 +163,23 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 	if err := l.syncLocal(ctx); err != nil {
 		return res, err
 	}
+	return res, nil
+}
 
-	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx, closes)
+// settleAfterMerge carries a merged pull request's closing references onto the
+// standing pull request.
+//
+// It runs before the local sync, not after: it needs only the forge, and a
+// checkout that cannot fast-forward must not also leave the issue with nothing
+// that will ever close it. A failure here is logged rather than returned — the
+// merge already happened, and must not read as a failed merge. StandingPR stays
+// zero when nothing was settled, which is how a caller tells.
+func (l Lander) settleAfterMerge(ctx context.Context, res *Result) {
+	var err error
+	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx, res.Closes)
 	if err != nil {
-		// The merge already happened. A standing-pull-request problem is worth
-		// reporting but must not read as a failed merge.
 		l.logf("merged, but could not settle the standing pull request: %v", err)
 	}
-	return res, nil
 }
 
 // AfterMerge finishes a pull request someone else merged: the same local sync
@@ -186,13 +196,9 @@ func (l Lander) AfterMerge(ctx context.Context, pr int) (Result, error) {
 	} else {
 		l.logf("could not read the pull request body: %v", err)
 	}
+	l.settleAfterMerge(ctx, &res)
 	if err := l.syncLocal(ctx); err != nil {
 		return res, err
-	}
-	var err error
-	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx, res.Closes)
-	if err != nil {
-		l.logf("merged, but could not settle the standing pull request: %v", err)
 	}
 	return res, nil
 }
