@@ -88,6 +88,10 @@ type Run struct {
 	// Announced is the head commit last reported ready for review, so that a
 	// revision which changed nothing does not announce the same commit twice.
 	Announced string `json:"announced,omitempty"`
+	// BehindNoted is the head commit at which the pull request was last
+	// reported as behind its base, so the note is posted once per commit
+	// rather than once per tick.
+	BehindNoted string `json:"behindNoted,omitempty"`
 }
 
 // InPhase reports the run's phase, treating an empty value as running.

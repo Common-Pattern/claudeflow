@@ -77,6 +77,9 @@ func (e Engine) advanceAwaitingReview(ctx context.Context, dispatch bool) error 
 		if settled {
 			continue
 		}
+		if r, err = e.noteIfBehind(ctx, r); err != nil {
+			e.logf("%s: could not compare #%d with %s: %v", r.ID(), r.PR, e.Cfg.Branches.Integration, err)
+		}
 		owed, err := e.revisionOwed(ctx, r)
 		if err != nil {
 			e.logf("%s: %v", r.ID(), err)
@@ -109,6 +112,45 @@ func (e Engine) settleIfClosed(ctx context.Context, r state.Run) (bool, error) {
 			"#%d was closed without merging. The branch is kept; comment here to start the issue again.", r.PR))
 	}
 	return false, nil
+}
+
+// noteIfBehind tells the operator when the integration branch has moved past
+// the point a pull request under review was branched from.
+//
+// A pull request that was green against an older base has not been tested
+// against what it will merge into, and a repository that requires branches to
+// be up to date refuses the merge outright. Either way the operator should hear
+// it before reaching for the merge button, not from the button. The note goes
+// on the pull request, where the review happens, once per head commit: a
+// revision that brings the branch up to date moves the head, and a base that
+// keeps moving under an unchanged head is still the same news.
+func (e Engine) noteIfBehind(ctx context.Context, r state.Run) (state.Run, error) {
+	sha, err := e.Client.PRHeadSHA(ctx, r.PR)
+	if err != nil {
+		return r, err
+	}
+	if sha == "" || sha == r.BehindNoted {
+		return r, nil
+	}
+	behind, err := e.Client.BehindBy(ctx, e.Cfg.Branches.Integration, sha)
+	if err != nil || behind == 0 {
+		return r, err
+	}
+
+	base := e.Cfg.Branches.Integration
+	commits := "commits"
+	if behind == 1 {
+		commits = "commit"
+	}
+	body := fmt.Sprintf("`%s` has moved %d %s past this branch, so it needs updating before it merges.\n\n"+
+		"Comment here to have it brought up to date: a revision merges `%s` in, resolves any conflicts, and the checks run again. "+
+		"Where the merge is clean, GitHub's **Update branch** button does the same.", base, behind, commits, base)
+	if err := e.Client.Comment(ctx, r.PR, body); err != nil {
+		return r, err
+	}
+	e.logf("%s: #%d is %d %s behind %s", r.ID(), r.PR, behind, commits, base)
+	r.BehindNoted = sha
+	return r, e.Store.SaveRun(r)
 }
 
 // mergedByHuman records a merge the operator made and brings the checkout up

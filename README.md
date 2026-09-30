@@ -449,6 +449,10 @@ than an integration branch. It is usually paired with `integration` equal to
    starts a **revision run**. It gets a slot and the run's existing worktree,
    reads every thread, answers questions, pushes changes to the same branch and
    stops. Back to step 2.
+   While it waits, claudeflow compares the branch with the integration
+   branch. When the integration branch has moved past it, it says so on the
+   pull request, once per head commit: the branch needs updating before it
+   merges, and a comment starts a revision that merges it in.
 5. When you merge, claudeflow labels the issue `claude:landed` and fast-forwards
    the checkout. When you close the pull request unmerged, it labels the issue
    `claude:blocked`; a comment on the issue starts it again.
