@@ -455,3 +455,64 @@ func TestLandOpensStandingPRWithClosingRefs(t *testing.T) {
 		t.Errorf("new standing body = %q, want it to close #192", f.Bodies[res.StandingPR])
 	}
 }
+
+// Carrying closing references needs only the forge. A checkout that cannot
+// fast-forward must not also leave the issue with nothing that will close it.
+func TestLandCarriesClosingRefsEvenWhenTheCheckoutDiverged(t *testing.T) {
+	w := newWorld(t)
+	run(t, w.worktree, "push", "origin", "HEAD:preview")
+	run(t, w.checkout, "commit", "--allow-empty", "-m", "local only")
+
+	f := forge.NewFake()
+	f.ChecksBy[7] = greenChecks()
+	f.Standing = []int{238}
+	f.Bodies[7] = "Closes #192"
+
+	res, err := lander(w, f).Land(t.Context(), 7, w.worktree)
+	if !errors.Is(err, ErrLocalDiverged) {
+		t.Fatalf("err = %v, want ErrLocalDiverged", err)
+	}
+	if !strings.Contains(f.Bodies[238], "Fixes #192") {
+		t.Errorf("standing body = %q, want it to close #192 despite the failed sync", f.Bodies[238])
+	}
+	if res.StandingPR != 238 {
+		t.Errorf("StandingPR = %d, want 238", res.StandingPR)
+	}
+}
+
+func TestAfterMergeCarriesClosingRefsEvenWhenTheCheckoutDiverged(t *testing.T) {
+	w := newWorld(t)
+	run(t, w.worktree, "push", "origin", "HEAD:preview")
+	run(t, w.checkout, "commit", "--allow-empty", "-m", "local only")
+
+	f := forge.NewFake()
+	f.Standing = []int{238}
+	f.Bodies[7] = "Closes #192"
+
+	res, err := lander(w, f).AfterMerge(t.Context(), 7)
+	if !errors.Is(err, ErrLocalDiverged) {
+		t.Fatalf("err = %v, want ErrLocalDiverged", err)
+	}
+	if !strings.Contains(f.Bodies[238], "Fixes #192") || res.StandingPR != 238 {
+		t.Errorf("standing body = %q, StandingPR = %d; want #192 carried onto 238", f.Bodies[238], res.StandingPR)
+	}
+}
+
+// With no standing pull request there is nothing to carry references onto, and
+// a caller must be able to tell rather than claim one will close the issue.
+func TestAfterMergeReportsNoStandingPRForSingleBranchProjects(t *testing.T) {
+	w := newWorld(t)
+	f := forge.NewFake()
+	f.Bodies[7] = "Closes #192"
+	l := lander(w, f)
+	l.Cfg.Branches.Base = "preview"
+	l.Cfg.Branches.Integration = "preview"
+
+	res, err := l.AfterMerge(t.Context(), 7)
+	if err != nil {
+		t.Fatalf("AfterMerge: %v", err)
+	}
+	if res.StandingPR != 0 {
+		t.Errorf("StandingPR = %d, want 0", res.StandingPR)
+	}
+}
