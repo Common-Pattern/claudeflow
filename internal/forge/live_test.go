@@ -153,3 +153,39 @@ func TestLivePRHeadSHA(t *testing.T) {
 		t.Errorf("headRefOid = %q, want a 40-character sha", sha)
 	}
 }
+
+func TestLivePRState(t *testing.T) {
+	g, _ := liveClient(t)
+	n := liveNumber(t, "CLAUDEFLOW_LIVE_PR")
+
+	st, err := g.PRState(t.Context(), n)
+	if err != nil {
+		t.Fatalf("PRState: %v", err)
+	}
+	switch st {
+	case PROpen, PRMerged, PRClosed:
+	default:
+		t.Fatalf("PRState = %q, want one of OPEN, MERGED, CLOSED", st)
+	}
+	t.Logf("pr #%d is %s", n, st)
+}
+
+// BehindBy reads the compare endpoint, which has no gh subcommand, so nothing
+// but this test notices if behind_by moves. The pull request's own head
+// compared with itself must be zero commits behind.
+func TestLiveBehindBy(t *testing.T) {
+	g, _ := liveClient(t)
+	n := liveNumber(t, "CLAUDEFLOW_LIVE_PR")
+
+	sha, err := g.PRHeadSHA(t.Context(), n)
+	if err != nil {
+		t.Fatalf("PRHeadSHA: %v", err)
+	}
+	behind, err := g.BehindBy(t.Context(), sha, sha)
+	if err != nil {
+		t.Fatalf("BehindBy: %v", err)
+	}
+	if behind != 0 {
+		t.Errorf("BehindBy(%s, %s) = %d, want 0", sha, sha, behind)
+	}
+}
