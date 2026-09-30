@@ -122,7 +122,9 @@ git merge "origin/$CLAUDEFLOW_INTEGRATION"
 ```
 
 If that conflicts, resolve it as part of this revision: the operator cannot
-merge a conflicted pull request.
+merge a conflicted pull request. claudeflow posts a note on the pull request
+when the integration branch has moved past it; a comment asking only to bring
+the branch up to date is answered by this step, the verify run, and a push.
 
 ## 4. Implement and verify
 

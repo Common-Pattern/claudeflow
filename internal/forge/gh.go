@@ -376,6 +376,23 @@ func (g *GH) PRHeadSHA(ctx context.Context, number int) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// BehindBy implements Client.
+//
+// The compare endpoint has no gh subcommand, so this is the raw API. It counts
+// from the merge base, which is exactly "what has landed on base since this
+// branch last caught up".
+func (g *GH) BehindBy(ctx context.Context, base, head string) (int, error) {
+	raw, err := g.run(ctx, "api", fmt.Sprintf("repos/%s/compare/%s...%s", g.Repo, base, head), "--jq", ".behind_by")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return 0, fmt.Errorf("decode compare of %s...%s: %w", base, head, err)
+	}
+	return n, nil
+}
+
 // PRState implements Client.
 func (g *GH) PRState(ctx context.Context, number int) (PRState, error) {
 	raw, err := g.run(ctx, "pr", "view", strconv.Itoa(number), "--repo", g.Repo,

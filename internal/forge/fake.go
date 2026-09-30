@@ -29,6 +29,8 @@ type Fake struct {
 	PRByBranch map[string]int
 	// States holds pull request states by number. Absent means open.
 	States map[int]PRState
+	// Behind holds how far the base is ahead of a head commit. Absent means 0.
+	Behind map[string]int
 
 	// Merged records pull requests merged, in order.
 	Merged []int
@@ -44,7 +46,7 @@ func NewFake() *Fake {
 		Issues: map[int]*Issue{}, Comments: map[int][]string{},
 		LastSpoke: map[string]time.Time{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
-		PRByBranch: map[string]int{}, States: map[int]PRState{},
+		PRByBranch: map[string]int{}, States: map[int]PRState{}, Behind: map[string]int{},
 	}
 }
 
@@ -211,6 +213,16 @@ func (f *Fake) PRHeadSHA(_ context.Context, number int) (string, error) {
 		return "", f.Err
 	}
 	return f.HeadSHA[number], nil
+}
+
+// BehindBy implements Client.
+func (f *Fake) BehindBy(_ context.Context, _, head string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return 0, f.Err
+	}
+	return f.Behind[head], nil
 }
 
 // PRState implements Client.

@@ -285,3 +285,62 @@ func TestReapSettlesARevisionWhosePullRequestWasMerged(t *testing.T) {
 		t.Errorf("runs = %v, want the run finished", runs)
 	}
 }
+
+func TestReviewNotesAPullRequestThatFellBehind(t *testing.T) {
+	e, f := newHumanEngine(t)
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Review)
+	f.HeadSHA[200] = "abc"
+	f.Behind["abc"] = 3
+	inReview(t, e, 7, 200)
+
+	for range 2 {
+		if err := e.advanceAwaitingReview(t.Context(), false); err != nil {
+			t.Fatalf("advance: %v", err)
+		}
+	}
+	if len(f.Comments[200]) != 1 || !strings.Contains(f.Comments[200][0], "3 commits past") {
+		t.Fatalf("comments on #200 = %v, want one note that it is 3 commits behind", f.Comments[200])
+	}
+	if len(f.Comments[7]) != 0 {
+		t.Errorf("comments on the issue = %v, want the note on the pull request only", f.Comments[7])
+	}
+}
+
+func TestReviewSaysNothingWhileUpToDate(t *testing.T) {
+	e, f := newHumanEngine(t)
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Review)
+	f.HeadSHA[200] = "abc"
+	inReview(t, e, 7, 200)
+
+	if err := e.advanceAwaitingReview(t.Context(), false); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if len(f.Comments[200]) != 0 {
+		t.Errorf("comments = %v, want none for an up-to-date branch", f.Comments[200])
+	}
+}
+
+// Updating the branch moves its head. If the base moves on again, that is news
+// about the new commit and is said again.
+func TestReviewNotesAgainForANewHead(t *testing.T) {
+	e, f := newHumanEngine(t)
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Review)
+	f.HeadSHA[200] = "abc"
+	f.Behind["abc"] = 1
+	inReview(t, e, 7, 200)
+	if err := e.advanceAwaitingReview(t.Context(), false); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+
+	f.HeadSHA[200] = "def"
+	f.Behind["def"] = 2
+	if err := e.advanceAwaitingReview(t.Context(), false); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if len(f.Comments[200]) != 2 {
+		t.Errorf("comments = %v, want one note per behind head", f.Comments[200])
+	}
+	if !strings.Contains(f.Comments[200][0], "1 commit past") {
+		t.Errorf("first note = %q, want the singular", f.Comments[200][0])
+	}
+}

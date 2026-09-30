@@ -215,6 +215,10 @@ type Client interface {
 	Checks(ctx context.Context, number int) ([]Check, error)
 	// PRHeadSHA returns the commit a pull request currently points at.
 	PRHeadSHA(ctx context.Context, number int) (string, error)
+	// BehindBy reports how many commits base has that head does not: how far
+	// the base branch has moved past the point head was branched from, or last
+	// brought up to date at.
+	BehindBy(ctx context.Context, base, head string) (int, error)
 	// PRState reports whether a pull request is open, merged or closed.
 	//
 	// When a human merges, this is how claudeflow learns the work is done: the
