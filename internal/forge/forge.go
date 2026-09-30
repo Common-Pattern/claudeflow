@@ -56,6 +56,16 @@ func (i Issue) HasAnyLabel(names ...string) bool {
 	return false
 }
 
+// PRState is where a pull request stands.
+type PRState string
+
+// The states a pull request can be in.
+const (
+	PROpen   PRState = "OPEN"
+	PRMerged PRState = "MERGED"
+	PRClosed PRState = "CLOSED"
+)
+
 // Check is one status check on a commit.
 type Check struct {
 	Name   string
@@ -205,6 +215,11 @@ type Client interface {
 	Checks(ctx context.Context, number int) ([]Check, error)
 	// PRHeadSHA returns the commit a pull request currently points at.
 	PRHeadSHA(ctx context.Context, number int) (string, error)
+	// PRState reports whether a pull request is open, merged or closed.
+	//
+	// When a human merges, this is how claudeflow learns the work is done: the
+	// merge happened in a browser, and nothing else tells it.
+	PRState(ctx context.Context, number int) (PRState, error)
 	// Merge merges a pull request, refusing if its head has moved away from
 	// wantSHA.
 	Merge(ctx context.Context, number int, wantSHA string) error

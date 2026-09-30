@@ -376,6 +376,16 @@ func (g *GH) PRHeadSHA(ctx context.Context, number int) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// PRState implements Client.
+func (g *GH) PRState(ctx context.Context, number int) (PRState, error) {
+	raw, err := g.run(ctx, "pr", "view", strconv.Itoa(number), "--repo", g.Repo,
+		"--json", "state", "--jq", ".state")
+	if err != nil {
+		return "", err
+	}
+	return PRState(strings.TrimSpace(string(raw))), nil
+}
+
 // Merge implements Client.
 //
 // --merge only: squash and rebase availability is a repository setting, and a

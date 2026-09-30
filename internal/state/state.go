@@ -44,6 +44,10 @@ const (
 	// PhaseAwaitingCI means the agent is gone and a pull request is open.
 	// claudeflow watches its checks and decides what happens next.
 	PhaseAwaitingCI Phase = "awaiting-ci"
+	// PhaseAwaitingReview means the pull request is green and waiting for a
+	// human to merge it or to ask for changes. Only reached when merging is
+	// left to a human.
+	PhaseAwaitingReview Phase = "awaiting-review"
 )
 
 // Valid reports whether k is a known kind.
@@ -81,6 +85,9 @@ type Run struct {
 	PR int `json:"pr,omitempty"`
 	// Attempts counts how many times an agent has been sent at failing checks.
 	Attempts int `json:"attempts,omitempty"`
+	// Announced is the head commit last reported ready for review, so that a
+	// revision which changed nothing does not announce the same commit twice.
+	Announced string `json:"announced,omitempty"`
 }
 
 // InPhase reports the run's phase, treating an empty value as running.

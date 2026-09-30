@@ -172,6 +172,31 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 	return res, nil
 }
 
+// AfterMerge finishes a pull request someone else merged: the same local sync
+// and closing-reference carry-over that Land does after its own merge.
+//
+// When a human merges, the merge happens in a browser. Without this the
+// checkout keeps serving pre-merge code exactly as it would after a server-side
+// merge claudeflow made itself, and an issue whose pull request merged into a
+// separate integration branch never gets closed.
+func (l Lander) AfterMerge(ctx context.Context, pr int) (Result, error) {
+	res := Result{PR: pr}
+	if body, err := l.Client.PRBody(ctx, pr); err == nil {
+		res.Closes = forge.ClosingRefs(body)
+	} else {
+		l.logf("could not read the pull request body: %v", err)
+	}
+	if err := l.syncLocal(ctx); err != nil {
+		return res, err
+	}
+	var err error
+	res.StandingPR, res.OpenedStanding, err = l.ensureStanding(ctx, res.Closes)
+	if err != nil {
+		l.logf("merged, but could not settle the standing pull request: %v", err)
+	}
+	return res, nil
+}
+
 func (l Lander) syncLocal(ctx context.Context) error {
 	if err := l.Repo.Fetch(ctx); err != nil {
 		return fmt.Errorf("fetch in checkout: %w", err)

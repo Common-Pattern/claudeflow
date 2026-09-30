@@ -194,17 +194,43 @@ func TestComposeProjectNaming(t *testing.T) {
 
 func TestLabelsHelpers(t *testing.T) {
 	l := Default().Labels
-	if got := len(l.All()); got != 6 {
-		t.Errorf("All() returned %d labels, want 6", got)
+	if got := len(l.All()); got != 7 {
+		t.Errorf("All() returned %d labels, want 7", got)
 	}
 	res := l.Resolution()
-	if len(res) != 3 {
-		t.Fatalf("Resolution() returned %d, want 3", len(res))
+	if len(res) != 4 {
+		t.Fatalf("Resolution() returned %d, want 4", len(res))
 	}
 	for _, label := range res {
 		if label == l.Queued || label == l.Working {
 			t.Errorf("Resolution() must not include the in-flight label %q", label)
 		}
+	}
+}
+
+func TestMergeDefaultsToAuto(t *testing.T) {
+	cfg, err := Parse([]byte(minimal), "/checkout")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.HumanMerges() {
+		t.Error("HumanMerges() = true for a config that does not ask for it")
+	}
+}
+
+func TestMergeHuman(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"merge: human\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !cfg.HumanMerges() {
+		t.Error("HumanMerges() = false with merge: human")
+	}
+}
+
+func TestMergeRejectsAnUnknownMode(t *testing.T) {
+	if _, err := Parse([]byte(minimal+"merge: sometimes\n"), "/checkout"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Parse error = %v, want ErrInvalid", err)
 	}
 }
 

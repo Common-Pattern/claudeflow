@@ -111,9 +111,14 @@ func Plan(ctx context.Context, in Inputs) []Start {
 
 func countLive(runs []state.Run) (builds, plans int) {
 	for _, r := range runs {
-		if r.Kind == state.KindPlan {
+		switch {
+		case r.Kind == state.KindPlan:
 			plans++
-		} else {
+		case r.InPhase(state.PhaseAwaitingReview):
+			// Waiting on a person, not on anything this machine does.
+			// Counting it would let a few unreviewed pull requests stop all
+			// new work.
+		default:
 			builds++
 		}
 	}

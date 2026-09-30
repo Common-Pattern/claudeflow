@@ -4,8 +4,9 @@ claudeflow drives a coding agent from GitHub issue labels. Label an issue, and
 it claims the issue, creates a git worktree, brings up an isolated environment
 the project defines, and runs the agent CLI against the issue. The agent opens a
 pull request and stops there; claudeflow watches the checks, merges into the
-integration branch when they are green, and sends a fresh agent at the failure
-when they are not.
+integration branch when they are green (or, with `merge: human`, leaves it for
+you to review and revises it on your comments), and sends a fresh agent at the
+failure when they are not.
 
 That split is deliberate. Waiting on CI is ten or twenty minutes of an
 environment and a model session spent polling, and it is the step an agent is
@@ -139,6 +140,7 @@ and no outcome.
 | `claude:landed` | merged into the integration branch | claudeflow |
 | `claude:question` | the agent asked something and is waiting for an answer | claudeflow |
 | `claude:blocked` | the run stopped on something it could not resolve | claudeflow |
+| `claude:review` | the pull request is green and waiting for you (`merge: human` only) | claudeflow |
 | `claude:planning` | alongside `claude`, inverts the run into conversation only | a human |
 
 `claude:planning` produces no branch, no commits and no files. The agent reads
@@ -193,7 +195,14 @@ labels:
   landed: claude:landed
   question: claude:question
   blocked: claude:blocked
+  review: claude:review
   planning: claude:planning
+
+# Who merges a green pull request. "auto" (the default): claudeflow lands it on
+# the integration branch. "human": it waits for you, and your comments and
+# reviews on it start a revision on the same branch. See "Leaving the merge to
+# a human".
+merge: auto
 
 limits:
   # How many slot-holding runs may be live at once. Must not exceed the number
@@ -389,7 +398,7 @@ checkout left running, which claudeflow's own records cannot.
 | `claudeflow doctor` | check dependencies, authentication, versions and configuration. Non-zero if a run would not get far |
 | `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
 | `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
-| `claudeflow labels` | create or update the six labels in the repository. Run once per repo |
+| `claudeflow labels` | create or update the seven labels in the repository. Run once per repo |
 | `claudeflow version` | version, commit and build date |
 
 A first run:
@@ -418,6 +427,36 @@ So claudeflow merges into the integration branch and leaves the
 integration-to-base merge to a human. The operator tests one branch, and
 anything that reached it is something they can see. `branches.base` is never
 written to by the agent.
+
+The argument changes when every pull request has its own preview environment:
+then the pull request *is* somewhere the operator looks. That is what
+`merge: human` is for.
+
+## Leaving the merge to a human
+
+With `merge: human`, each issue becomes its own pull request that you review
+before anything merges. This suits a project where every pull request gets its
+own preview environment, so the thing to test is the pull request itself rather
+than an integration branch. It is usually paired with `integration` equal to
+`base`.
+
+1. The build run opens its pull request and stops, as in the default mode.
+2. claudeflow watches the checks and sends fix runs at red ones, as before.
+3. On green it does **not** merge. It labels the issue `claude:review` and
+   comments that the pull request is ready, once per commit.
+4. A comment or review from `user` on the pull request, including an inline
+   review comment or a "request changes" review, or a comment on the issue,
+   starts a **revision run**. It gets a slot and the run's existing worktree,
+   reads every thread, answers questions, pushes changes to the same branch and
+   stops. Back to step 2.
+5. When you merge, claudeflow labels the issue `claude:landed` and fast-forwards
+   the checkout. When you close the pull request unmerged, it labels the issue
+   `claude:blocked`; a comment on the issue starts it again.
+
+A pull request waiting for review holds no slot and does not count against
+`maxBuilds`, so unreviewed work never stops new work from starting. A revision
+does count: it is a build in every way that matters. A revision asked for while
+every slot is busy is remembered and starts when one frees up.
 
 ## Licence
 

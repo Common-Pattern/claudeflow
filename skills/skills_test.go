@@ -33,6 +33,7 @@ func TestSkillsReferenceTheContract(t *testing.T) {
 		Review:   {"CLAUDEFLOW_PR", "CLAUDEFLOW_USER"},
 		Planning: {"CLAUDEFLOW_ISSUE", "CLAUDEFLOW_LABEL_QUESTION"},
 		Fix:      {"CLAUDEFLOW_PR", "CLAUDEFLOW_FAILING_CHECKS", "CLAUDEFLOW_VERIFY"},
+		Revise:   {"CLAUDEFLOW_PR", "CLAUDEFLOW_ISSUE", "CLAUDEFLOW_USER", "CLAUDEFLOW_BRANCH", "CLAUDEFLOW_VERIFY"},
 	} {
 		raw, err := Read(name, "")
 		if err != nil {

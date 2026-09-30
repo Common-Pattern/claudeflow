@@ -46,6 +46,13 @@ func (e Engine) advanceAwaitingCI(ctx context.Context) error {
 }
 
 func (e Engine) advanceOne(ctx context.Context, r state.Run) error {
+	if e.Cfg.HumanMerges() {
+		// A human may merge or close before the checks finish; either ends
+		// the run, and waiting on checks for it would wait forever.
+		if settled, err := e.settleIfClosed(ctx, r); settled || err != nil {
+			return err
+		}
+	}
 	checks, err := e.Client.Checks(ctx, r.PR)
 	if err != nil {
 		return fmt.Errorf("read checks on #%d: %w", r.PR, err)
@@ -63,6 +70,9 @@ func (e Engine) advanceOne(ctx context.Context, r state.Run) error {
 
 	if failed := forge.Failed(checks); len(failed) > 0 {
 		return e.handleRedCI(ctx, r, failed)
+	}
+	if e.Cfg.HumanMerges() {
+		return e.readyForReview(ctx, r)
 	}
 	return e.landRun(ctx, r)
 }
@@ -169,6 +179,15 @@ func (e Engine) awaitCI(ctx context.Context, r state.Run, pr int) error {
 			e.logf("%s: teardown reported a problem: %v", r.ID(), err)
 		}
 	}
+	if e.Cfg.HumanMerges() && r.PR == 0 {
+		// First sight of the pull request. Record where its conversation
+		// stands, so that only what the operator says from here on asks for
+		// a revision, and nothing said before it opened is lost to the
+		// first-sight rule once it is being watched.
+		if latest, err := e.Client.LatestCommentBy(ctx, forge.TargetPR, pr, e.Cfg.User); err == nil {
+			_ = e.Store.MarkSeen(reviewKey(pr), latest)
+		}
+	}
 	r.PR = pr
 	r.Phase = state.PhaseAwaitingCI
 	r.PID = 0
@@ -236,6 +255,18 @@ func (e Engine) lockLanding() (func(), error) {
 // startFix brings the run's environment back up and sends an agent at the
 // failing checks, with the failure already named.
 func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error {
+	prompt := fmt.Sprintf(
+		"The checks on pull request #%d are failing: %s. Fix them, following the run instructions in your system prompt exactly. This is attempt %d of %d.",
+		r.PR, failing, r.Attempts, e.Cfg.Limits.FixAttempts)
+	return e.resume(ctx, r, skills.Fix, prompt, fmt.Sprintf("fix-%d", r.PR), runner.Env{
+		"CLAUDEFLOW_FAILING_CHECKS": failing,
+		"CLAUDEFLOW_ATTEMPT":        strconv.Itoa(r.Attempts),
+	})
+}
+
+// resume brings a parked run's environment back up on r.Slot and sends a new
+// agent into its existing worktree and branch.
+func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, prompt, logName string, extra runner.Env) error {
 	st := e.stack(r.Slot)
 	st.Env = e.stackEnv(r.Slot, r.Worktree, r.Branch)
 	if err := st.Down(ctx); err != nil {
@@ -251,13 +282,10 @@ func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error
 		return fmt.Errorf("stack did not become ready: %w", err)
 	}
 
-	instructions, err := skills.Read(skills.Fix, e.Cfg.Agent.SkillsDir)
+	instructions, err := skills.Read(name, e.Cfg.Agent.SkillsDir)
 	if err != nil {
 		return err
 	}
-	prompt := fmt.Sprintf(
-		"The checks on pull request #%d are failing: %s. Fix them, following the run instructions in your system prompt exactly. This is attempt %d of %d.",
-		r.PR, failing, r.Attempts, e.Cfg.Limits.FixAttempts)
 
 	args := []string{
 		"-p", prompt,
@@ -271,12 +299,13 @@ func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error
 	args = append(args, e.Cfg.Agent.ExtraArgs...)
 
 	logPath := filepath.Join(e.Store.LogDir(),
-		fmt.Sprintf("fix-%d-%s.log", r.PR, e.now().UTC().Format("20060102T150405")))
+		fmt.Sprintf("%s-%s.log", logName, e.now().UTC().Format("20060102T150405")))
 
 	env := e.runEnv(ctx, Start{Kind: r.Kind, Ref: r.Ref, Slot: r.Slot}, r)
 	env["CLAUDEFLOW_PR"] = strconv.Itoa(r.PR)
-	env["CLAUDEFLOW_FAILING_CHECKS"] = failing
-	env["CLAUDEFLOW_ATTEMPT"] = strconv.Itoa(r.Attempts)
+	for k, v := range extra {
+		env[k] = v
+	}
 
 	// A fix run is a new process. Keeping the first run's start time made
 	// every fix look like a recycled pid, and the next tick reaped it and took
@@ -299,6 +328,6 @@ func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error
 	if err := e.Store.SaveRun(r); err != nil {
 		return err
 	}
-	e.logf("%s: fix run started (pid %d, slot %d, log %s)", r.ID(), r.PID, r.Slot, logPath)
+	e.logf("%s: %s run started (pid %d, slot %d, log %s)", r.ID(), name, r.PID, r.Slot, logPath)
 	return nil
 }
