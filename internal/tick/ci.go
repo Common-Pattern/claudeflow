@@ -148,6 +148,9 @@ func (e Engine) handleRedCI(ctx context.Context, r state.Run, failed []string) e
 // finishRun resolves the issue and clears the run.
 func (e Engine) finishRun(ctx context.Context, r state.Run, label, body string) error {
 	if r.Kind != state.KindReview {
+		if r.Log != "" {
+			body += "\n\n- Transcript: " + e.transcript(r.Log)
+		}
 		if err := e.Client.Comment(ctx, r.Ref, body); err != nil {
 			e.logf("%s: could not comment: %v", r.ID(), err)
 		}
@@ -329,5 +332,6 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 		return err
 	}
 	e.logf("%s: %s run started (pid %d, slot %d, log %s)", r.ID(), name, r.PID, r.Slot, logPath)
+	e.announceStart(ctx, r.Ref, string(name), logPath)
 	return nil
 }

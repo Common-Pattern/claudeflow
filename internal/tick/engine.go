@@ -53,6 +53,20 @@ func (e Engine) transcript(logPath string) string {
 	return fmt.Sprintf("`%s`", logPath)
 }
 
+// announceStart tells the thread a run has begun and where to watch it. Every
+// run gets one, not only the ones that end badly: the transcript is written as
+// the agent works, so the link is most useful while nothing has gone wrong yet.
+//
+// A comment that does not post is logged and dropped. The run is already
+// going, and failing it over a missing note would cost the work to save the
+// note.
+func (e Engine) announceStart(ctx context.Context, ref int, what, logPath string) {
+	body := fmt.Sprintf("Started a %s run.\n\n- Transcript: %s", what, e.transcript(logPath))
+	if err := e.Client.Comment(ctx, ref, body); err != nil {
+		e.logf("#%d: could not announce the %s run: %v", ref, what, err)
+	}
+}
+
 func (e Engine) now() time.Time {
 	if e.Now != nil {
 		return e.Now()
@@ -458,6 +472,7 @@ func (e Engine) start(ctx context.Context, s Start) error {
 		return err
 	}
 	e.logf("%s: started (pid %d, slot %d, log %s)", run.ID(), run.PID, run.Slot, run.Log)
+	e.announceStart(ctx, run.Ref, string(run.Kind), run.Log)
 	return nil
 }
 

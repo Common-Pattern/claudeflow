@@ -131,6 +131,27 @@ func TestClaimKeepsTheQueuedLabel(t *testing.T) {
 	}
 }
 
+// Every run says where its transcript is as it starts, not only the runs that
+// end badly: the log is written as the agent works, and watching it is the
+// quickest way to see what a run is doing.
+func TestStartAnnouncesTheTranscript(t *testing.T) {
+	e, f := newEngine(t)
+	agent, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no `true` on PATH")
+	}
+	e.Cfg.Agent.Command = agent
+	e.Cfg.Transcripts = config.Transcripts{Host: "box.example", Port: 8787}
+	f.AddIssue(42, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Planning)
+
+	if err := e.Start(t.Context(), Start{Kind: state.KindPlan, Ref: 42}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if len(f.Comments[42]) != 1 || !strings.Contains(f.Comments[42][0], "http://box.example:8787/plan-42-") {
+		t.Errorf("comments = %q, want one linking the transcript", f.Comments[42])
+	}
+}
+
 // A start that fails after its claim resolves the claim itself, as blocked.
 // Left to the stranded-claim sweep it was re-queued and re-dispatched, and a
 // failure that was not transient added and removed the working label on every
