@@ -38,6 +38,9 @@ func (e Engine) readyForReview(ctx context.Context, r state.Run) error {
 		body := fmt.Sprintf("#%d is green at `%s` and waiting for your review.\n\n"+
 			"Merge it when it is right. To change it, comment or leave a review on the pull request, "+
 			"or comment here; either starts a revision on the same branch.", r.PR, short(sha))
+		if r.Log != "" {
+			body += "\n\n- Transcript: " + e.transcript(r.Log)
+		}
 		if err := e.Client.Comment(ctx, r.Ref, body); err != nil {
 			e.logf("%s: could not comment: %v", r.ID(), err)
 		}

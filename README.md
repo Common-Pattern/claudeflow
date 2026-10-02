@@ -296,14 +296,16 @@ paths:
 
 ### Serving transcripts
 
-A run that ends badly comments on its issue. Without this it names a path —
-`/home/sj/.../.claudeflow/logs/build-252-20260922T165737.log` — which is only
-actionable to someone already logged in to the host that produced it.
+Every run comments on its issue as it starts, naming its transcript, and the
+comment that settles it names the transcript again. Without this each names a
+path — `/home/sj/.../.claudeflow/logs/build-252-20260922T165737.log` — which is
+only actionable to someone already logged in to the host that produced it.
 
 Setting a port makes `serve` publish the log directory read-only over HTTP, and
-the comment carries a link instead. Nothing is copied anywhere: the file is
-served where housekeeping already manages it, so the retention window is the
-one you already set. The alternatives all involve copying — a gist is unlisted
+the comments carry a link instead. The log is written as the agent works, so
+the start comment's link shows the run so far on every refresh. Nothing is
+copied anywhere: the file is served where housekeeping already manages it, so
+the retention window is the one you already set. The alternatives all involve copying — a gist is unlisted
 rather than private, and a branch puts run output into the project's history.
 
 ```yaml
