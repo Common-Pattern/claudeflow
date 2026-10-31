@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ func get(t *testing.T, s Server, remote, path string) *httptest.ResponseRecorder
 
 func TestServesATranscriptToAPermittedNetwork(t *testing.T) {
 	s := serverOver(t)
-	w := get(t, s, "100.71.59.106:51000", "/build-252-20260922T165737.log")
+	w := get(t, s, "100.71.59.106:51000", "/build-252-20260922T165737.log?raw")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -179,5 +180,125 @@ func TestPeerUnmapsIPv4(t *testing.T) {
 	}
 	if !netip.MustParsePrefix("100.64.0.0/10").Contains(addr) {
 		t.Errorf("%v is not matched by the v4 prefix it belongs to", addr)
+	}
+}
+
+// stream is a run as the CLI writes it, with hook output ahead of it.
+const stream = `installing dependencies
+{"type":"system","subtype":"init","model":"opus","cwd":"/work"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"thinking","thinking":""},{"type":"tool_use","name":"Bash","input":{"command":"echo <hello>","description":"Print"}}]}}
+{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","content":"<hello>","is_error":false}]}}
+{"type":"user","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"no such file"}],"is_error":true}]}}
+{"type":"system","subtype":"thinking_tokens","estimated_tokens":50}
+{"type":"something_new","payload":"unseen"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"All done."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"All done.","num_turns":3,"duration_ms":5316,"total_cost_usd":0.25}
+`
+
+func TestRendersARun(t *testing.T) {
+	page, done := render([]byte(stream))
+	got := string(page)
+	if !done {
+		t.Error("the closing event did not mark the run done")
+	}
+	for _, want := range []string{
+		"installing dependencies",
+		"Agent started: opus in /work",
+		"<b>Bash</b> echo &lt;hello&gt;",
+		"&lt;hello&gt;",
+		"no such file",
+		"All done.",
+		"Finished in 5s, 3 turns, $0.25",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("page lacks %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"<hello>", "thinking_tokens", "unseen"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("page holds %q:\n%s", unwanted, got)
+		}
+	}
+	// The closing result repeats the last message.
+	if n := strings.Count(got, "All done."); n != 1 {
+		t.Errorf("the last message appears %d times", n)
+	}
+	if !strings.Contains(got, `class="ev output error sub"`) {
+		t.Errorf("a subagent's failed call is not marked:\n%s", got)
+	}
+}
+
+func TestRendersAFailedRun(t *testing.T) {
+	page, done := render([]byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"it broke","duration_ms":1000}` + "\n"))
+	if !done || !strings.Contains(string(page), "it broke") {
+		t.Errorf("done = %v, page = %s", done, page)
+	}
+}
+
+func TestBoundsALargeBody(t *testing.T) {
+	big := strings.Repeat("é", maxBody)
+	if got := bounded(big); len(got) > maxBody+64 || !strings.Contains(got, "more bytes in the raw log") || strings.ContainsRune(got, '\uFFFD') {
+		t.Errorf("bounded left %d bytes", len(got))
+	}
+}
+
+// The page polls with the offset it was given, and must only ever see whole
+// lines: the run may be partway through writing one.
+func TestFollowsARunAsItIsWritten(t *testing.T) {
+	s := serverOver(t)
+	name := "build-1-20260922T165737.log"
+	path := filepath.Join(s.Dir, name)
+	first := `{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}` + "\n"
+	second := `{"type":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`
+	if err := os.WriteFile(path, []byte(first+second[:20]), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	w := get(t, s, "100.71.59.106:51000", "/"+name)
+	body := w.Body.String()
+	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") || !strings.Contains(body, "first") {
+		t.Fatalf("page = %s", body)
+	}
+	offset := strconv.Itoa(len(first))
+	if !strings.Contains(body, `data-next="`+offset+`"`) || strings.Contains(body, "data-done") {
+		t.Fatalf("page does not resume at %s:\n%s", offset, body)
+	}
+
+	w = get(t, s, "100.71.59.106:51000", "/"+name+"?from="+offset)
+	if w.Body.Len() != 0 || w.Header().Get("X-Next-Offset") != offset {
+		t.Fatalf("half a line was served: %q, next %s", w.Body.String(), w.Header().Get("X-Next-Offset"))
+	}
+
+	rest := second[20:] + "\n" + `{"type":"result","subtype":"success"}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(rest); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	w = get(t, s, "100.71.59.106:51000", "/"+name+"?from="+offset)
+	if !strings.Contains(w.Body.String(), "second") || w.Header().Get("X-Run-Done") == "" {
+		t.Errorf("update = %q, done = %q", w.Body.String(), w.Header().Get("X-Run-Done"))
+	}
+	if strings.Contains(w.Body.String(), "first") {
+		t.Errorf("update repeats what the page already has: %q", w.Body.String())
+	}
+
+	w = get(t, s, "100.71.59.106:51000", "/"+name)
+	if !strings.Contains(w.Body.String(), "data-done") {
+		t.Error("a finished run's page still polls")
+	}
+}
+
+func TestRefusesABadOffset(t *testing.T) {
+	s := serverOver(t)
+	for _, from := range []string{"-1", "soon"} {
+		w := get(t, s, "100.71.59.106:51000", "/build-252-20260922T165737.log?from="+from)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("from=%s: status = %d, want 400", from, w.Code)
+		}
 	}
 }

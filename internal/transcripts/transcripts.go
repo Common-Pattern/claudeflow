@@ -8,21 +8,27 @@
 // into the project's history. Serving the file where it already lies copies
 // nothing and expires nothing that housekeeping does not already expire.
 //
+// A log is the agent CLI's event stream, so the link opens a page that renders
+// it and follows it while the run is going; ?raw is the file as it lies.
+//
 // The server is read-only, has no routes but a listing and a file, and answers
 // nobody outside the configured CIDR blocks.
 package transcripts
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -196,15 +202,85 @@ func (s Server) file(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
-	// Set before ServeContent, which otherwise sniffs — and a transcript that
-	// began with markup would then be served as a document to render rather
-	// than as the text it is. nosniff stops the browser second-guessing that.
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// A transcript is rewritten while its run is live and is deleted by
 	// housekeeping; nothing should hold a copy of one.
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeContent(w, r, name, info.ModTime(), f)
+
+	query := r.URL.Query()
+	switch {
+	case query.Has("raw"):
+		// Set before ServeContent, which otherwise sniffs — and a transcript
+		// that began with markup would then be served as a document to render
+		// rather than as the text it is. nosniff stops the browser
+		// second-guessing that.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		http.ServeContent(w, r, name, info.ModTime(), f)
+	case query.Has("from"):
+		s.follow(w, f, query.Get("from"))
+	default:
+		s.view(w, f, name)
+	}
+}
+
+// consume renders what the log holds past an offset, and returns the offset to
+// ask from next. It stops at the last line break: a run may be halfway through
+// writing a line, and that line is read whole on the next request.
+func consume(f io.ReadSeeker, from int64) (template.HTML, int64, bool, error) {
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return "", from, false, err
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return "", from, false, err
+	}
+	end := bytes.LastIndexByte(raw, '\n')
+	if end < 0 {
+		return "", from, false, nil
+	}
+	fragment, done := render(raw[:end+1])
+	return fragment, from + int64(end) + 1, done, nil
+}
+
+// follow answers the page's poll with the events since its last one.
+func (s Server) follow(w http.ResponseWriter, f io.ReadSeeker, from string) {
+	offset, err := strconv.ParseInt(from, 10, 64)
+	if err != nil || offset < 0 {
+		http.Error(w, "bad offset", http.StatusBadRequest)
+		return
+	}
+	fragment, next, done, err := consume(f, offset)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Next-Offset", strconv.FormatInt(next, 10))
+	if done {
+		w.Header().Set("X-Run-Done", "1")
+	}
+	if _, err := io.WriteString(w, string(fragment)); err != nil {
+		s.logf("transcripts: write update: %v", err)
+	}
+}
+
+// view renders the page for one transcript: the run so far, and the script
+// that keeps it current.
+func (s Server) view(w http.ResponseWriter, f io.ReadSeeker, name string) {
+	fragment, next, done, err := consume(f, 0)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := viewTmpl.Execute(w, struct {
+		Name, Repo string
+		Events     template.HTML
+		Next       int64
+		Done       bool
+	}{name, s.Repo, fragment, next, done}); err != nil {
+		s.logf("transcripts: render %s: %v", name, err)
+	}
 }
 
 // entry is one transcript in the listing.
@@ -296,4 +372,51 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
 {{- else}}
 <p>No transcripts yet.</p>
 {{- end}}
+`))
+
+// viewTmpl shows one transcript. A page opened on a finished run does not poll.
+// A run that is killed never sends its closing event, so a page left open on
+// one keeps polling; that costs one small request every two seconds.
+var viewTmpl = template.Must(template.New("view").Parse(`<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Name}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem auto; max-width: 64rem; padding: 0 1rem; }
+  header { display: flex; flex-wrap: wrap; gap: 1rem; font-weight: 600; margin-bottom: 1.5rem; }
+  header a, header span { font-weight: 400; opacity: .6; }
+  header .name { flex: 1; font-weight: 600; opacity: 1; overflow-wrap: anywhere; }
+  .ev { padding: .2rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sub { border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); margin-left: .25rem; padding-left: .75rem; }
+  .say { font-family: system-ui, sans-serif; padding: .6rem 0; }
+  .plain, .note, .output { opacity: .65; }
+  .error { color: #d1242f; opacity: 1; }
+  summary { cursor: pointer; }
+  pre { font: inherit; margin: .25rem 0 .5rem; max-height: 32rem; overflow: auto; padding: .5rem; white-space: pre-wrap;
+        background: color-mix(in srgb, currentColor 7%, transparent); }
+</style>
+<header><span class="name">{{.Name}}</span>{{with .Repo}}<span>{{.}}</span>{{end}}<span id="state">{{if .Done}}finished{{else}}following{{end}}</span><a href="?raw">raw</a><a href="/">all runs</a></header>
+<main id="log" data-next="{{.Next}}"{{if .Done}} data-done{{end}}>
+{{.Events}}</main>
+<script>
+  const log = document.getElementById('log'), state = document.getElementById('state');
+  let next = Number(log.dataset.next);
+  async function poll() {
+    try {
+      const res = await fetch(location.pathname + '?from=' + next);
+      if (res.status === 404) { state.textContent = 'removed'; return; }
+      if (res.ok) {
+        const page = document.documentElement;
+        const atEnd = innerHeight + scrollY >= page.scrollHeight - 80;
+        log.insertAdjacentHTML('beforeend', await res.text());
+        next = Number(res.headers.get('X-Next-Offset'));
+        if (atEnd) scrollTo(0, page.scrollHeight);
+        if (res.headers.has('X-Run-Done')) { state.textContent = 'finished'; return; }
+      }
+    } catch { /* The next poll tries again: a host restart should not end the page. */ }
+    setTimeout(poll, 2000);
+  }
+  if (!('done' in log.dataset)) { scrollTo(0, document.documentElement.scrollHeight); setTimeout(poll, 2000); }
+</script>
 `))
