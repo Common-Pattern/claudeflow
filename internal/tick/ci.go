@@ -294,7 +294,8 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 		"-p", prompt,
 		"--append-system-prompt", string(instructions),
 		"--permission-mode", "bypassPermissions",
-		"--output-format", "text",
+		"--output-format", "stream-json",
+		"--verbose",
 	}
 	if e.Cfg.Agent.Model != "" {
 		args = append(args, "--model", e.Cfg.Agent.Model)

@@ -355,6 +355,27 @@ func TestHitUsageLimit(t *testing.T) {
 	}
 }
 
+// A transcript carries everything the agent read and ran, so only what the CLI
+// said for itself counts.
+func TestHitUsageLimitInAnEventStream(t *testing.T) {
+	cases := []struct {
+		name, transcript string
+		want             bool
+	}{
+		{"tool output", `{"type":"user","message":{"content":[{"type":"tool_result","content":"usage limit"}]}}`, false},
+		{"agent prose", `{"type":"assistant","message":{"content":[{"type":"text","text":"too many requests"}]}}`, false},
+		{"headroom report", `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`, false},
+		{"refused event", `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}`, true},
+		{"closing result", `{"type":"result","is_error":true,"result":"Claude usage limit reached"}`, true},
+		{"stderr between events", "{\"type\":\"system\"}\nAPI error: Rate limit exceeded\n{\"type\":\"system\"}", true},
+	}
+	for _, c := range cases {
+		if got := HitUsageLimit(c.transcript); got != c.want {
+			t.Errorf("%s: HitUsageLimit = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestUsageLimitPatternsAreExtensible(t *testing.T) {
 	original := UsageLimitPatterns
 	t.Cleanup(func() { UsageLimitPatterns = original })

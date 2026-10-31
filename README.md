@@ -302,9 +302,10 @@ path — `/home/sj/.../.claudeflow/logs/build-252-20260922T165737.log` — which
 only actionable to someone already logged in to the host that produced it.
 
 Setting a port makes `serve` publish the log directory read-only over HTTP, and
-the comments carry a link instead. The log is written as the agent works, so
-the start comment's link shows the run so far on every refresh. Nothing is
-copied anywhere: the file is served where housekeeping already manages it, so
+the comments carry a link instead. Runs write the agent's event stream to the
+log as they work, so the link opens a page that follows the run live: its
+messages, each tool call and its output, and how it finished. `?raw` is the
+file itself. Nothing is copied anywhere: the file is served where housekeeping already manages it, so
 the retention window is the one you already set. The alternatives all involve copying — a gist is unlisted
 rather than private, and a branch puts run output into the project's history.
 
