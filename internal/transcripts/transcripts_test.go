@@ -186,7 +186,7 @@ func TestPeerUnmapsIPv4(t *testing.T) {
 // stream is a run as the CLI writes it, with hook output ahead of it.
 const stream = `installing dependencies
 {"type":"system","subtype":"init","model":"opus","cwd":"/work"}
-{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"thinking","thinking":""},{"type":"tool_use","name":"Bash","input":{"command":"echo <hello>","description":"Print"}}]}}
+{"type":"assistant","timestamp":"2026-11-09T04:22:58.945+05:30","parent_tool_use_id":null,"message":{"content":[{"type":"thinking","thinking":""},{"type":"tool_use","name":"Bash","input":{"command":"echo <hello>","description":"Print"}}]}}
 {"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","content":"<hello>","is_error":false}]}}
 {"type":"user","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"tool_result","content":[{"type":"text","text":"no such file"}],"is_error":true}]}}
 {"type":"system","subtype":"thinking_tokens","estimated_tokens":50}
@@ -225,6 +225,40 @@ func TestRendersARun(t *testing.T) {
 	}
 	if !strings.Contains(got, `class="ev output error sub"`) {
 		t.Errorf("a subagent's failed call is not marked:\n%s", got)
+	}
+	// The stamp is carried in UTC whatever offset the CLI wrote it with, and
+	// once per record; the page's script turns it to the reader's zone.
+	if n := strings.Count(got, `<time datetime="2026-11-08T22:52:58.945Z">22:52:58</time>`); n != 1 {
+		t.Errorf("the stamped message shows its time %d times, want 1:\n%s", n, got)
+	}
+	if n := strings.Count(got, "<time"); n != 1 {
+		t.Errorf("%d times on the page, want only the one record that carries a stamp", n)
+	}
+}
+
+// The pages are set in fonts the server holds itself, and the font route
+// serves those and nothing else.
+func TestServesTheEmbeddedFonts(t *testing.T) {
+	s := serverOver(t)
+	for _, name := range []string{"IBMPlexMono-Regular", "IBMPlexMono-SemiBold", "IBMPlexSans-Regular", "IBMPlexSans-SemiBold"} {
+		w := get(t, s, "100.71.59.106:51000", "/fonts/"+name+".woff2")
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "font/woff2" || w.Body.Len() < 1024 {
+			t.Errorf("%s: status %d, type %q, %d bytes", name, w.Code, w.Header().Get("Content-Type"), w.Body.Len())
+		}
+	}
+	// A path that climbs out is cleaned and redirected by the mux before the
+	// route sees it; what matters is that nothing is served for it.
+	for _, path := range []string{"/fonts/OFL.txt", "/fonts/../transcripts.go", "/fonts/fonts/IBMPlexMono-Regular.woff2", "/fonts/missing.woff2"} {
+		if w := get(t, s, "100.71.59.106:51000", path); w.Code == http.StatusOK {
+			t.Errorf("%s: served (%d bytes)", path, w.Body.Len())
+		}
+	}
+	if w := get(t, s, "203.0.113.9:51000", "/fonts/IBMPlexMono-Regular.woff2"); w.Code != http.StatusNotFound {
+		t.Errorf("a refused network got a font: status %d", w.Code)
+	}
+	page := get(t, s, "100.71.59.106:51000", "/build-252-20260922T165737.log").Body.String()
+	if !strings.Contains(page, `url("/fonts/IBMPlexSans-Regular.woff2")`) || strings.Contains(page, "system-ui") || strings.Contains(page, "Menlo") {
+		t.Error("the page is not set in the embedded fonts alone")
 	}
 }
 

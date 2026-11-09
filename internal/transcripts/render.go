@@ -28,7 +28,10 @@ type record struct {
 	Subtype string `json:"subtype"`
 	Model   string `json:"model"`
 	Cwd     string `json:"cwd"`
-	Message struct {
+	// Timestamp is set on assistant and user messages only; the CLI stamps no
+	// other event.
+	Timestamp string `json:"timestamp"`
+	Message   struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	Parent        string  `json:"parent_tool_use_id"`
@@ -62,14 +65,21 @@ type event struct {
 	Body    string
 	Open    bool
 	Sub     bool
+	// Time is when the record was written, zero when the record carries none.
+	Time time.Time
 }
 
 // eventTmpl is html/template because everything in an event is whatever a run
 // printed, and the page around it is one a person has open in a browser.
+//
+// The time is written in UTC; the page's script rewrites it in the reader's
+// zone, so the same link reads correctly wherever it is opened.
 var eventTmpl = template.Must(template.New("event").Parse(
-	`<div class="ev {{.Class}}{{if .Sub}} sub{{end}}">` +
+	`<div class="ev {{.Class}}{{if .Sub}} sub{{end}}"><span class="t">` +
+		`{{if not .Time.IsZero}}<time datetime="{{.Time.Format "2006-01-02T15:04:05.000Z07:00"}}">{{.Time.Format "15:04:05"}}</time>{{end}}` +
+		`</span><div class="b">` +
 		`{{if .Body}}<details{{if .Open}} open{{end}}><summary>{{if .Label}}<b>{{.Label}}</b> {{end}}{{.Summary}}</summary><pre>{{.Body}}</pre></details>` +
-		`{{else}}{{if .Label}}<b>{{.Label}}</b> {{end}}{{.Summary}}{{end}}</div>` + "\n"))
+		`{{else}}{{if .Label}}<b>{{.Label}}</b> {{end}}{{.Summary}}{{end}}</div></div>` + "\n"))
 
 // render turns complete lines of a log into page fragments, and reports whether
 // they include the agent's closing event.
@@ -94,8 +104,14 @@ func render(data []byte) (template.HTML, bool) {
 		if rec.Type == "result" {
 			done = true
 		}
-		for _, ev := range events(rec) {
+		// One message can show as several events; only the first carries the
+		// time, so a column of identical stamps does not bury the ones that move.
+		stamp, _ := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		for i, ev := range events(rec) {
 			ev.Sub = rec.Parent != ""
+			if i == 0 {
+				ev.Time = stamp.UTC()
+			}
 			write(&out, ev)
 		}
 	}

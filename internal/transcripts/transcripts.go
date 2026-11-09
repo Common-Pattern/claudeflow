@@ -11,27 +11,38 @@
 // A log is the agent CLI's event stream, so the link opens a page that renders
 // it and follows it while the run is going; ?raw is the file as it lies.
 //
-// The server is read-only, has no routes but a listing and a file, and answers
-// nobody outside the configured CIDR blocks.
+// The server is read-only, has no routes but a listing, a file and the fonts
+// its pages are set in, and answers nobody outside the configured CIDR blocks.
 package transcripts
 
 import (
 	"bytes"
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// fonts holds IBM Plex Sans and Mono (SIL OFL 1.1, fonts/OFL.txt). They are
+// served from the binary rather than a font CDN: the pages are read on a
+// private network, and a reader's browser should not ask a third party for
+// anything to show one.
+//
+//go:embed fonts/*.woff2 fonts/OFL.txt
+var fonts embed.FS
 
 // Server publishes a directory of run transcripts.
 type Server struct {
@@ -164,8 +175,45 @@ func (s Server) route(w http.ResponseWriter, r *http.Request) {
 		s.index(w, r)
 		return
 	}
+	if font, ok := strings.CutPrefix(name, "fonts/"); ok {
+		serveFont(w, r, font)
+		return
+	}
 	s.file(w, r, name)
 }
+
+// serveFont answers for one embedded font file and nothing else. The name is
+// held to a single path element, so the request cannot reach the license file
+// or anything outside the font directory by way of the embedded tree.
+func serveFont(w http.ResponseWriter, r *http.Request, name string) {
+	if name != path.Base(name) || !strings.HasSuffix(name, ".woff2") {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	data, err := fs.ReadFile(fonts, "fonts/"+name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "font/woff2")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The files change only with the binary, and their names are not
+	// versioned, so a week rather than forever.
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
+}
+
+// fontCSS declares the embedded fonts for both pages. The generic family after
+// each is for glyphs Plex does not draw, not a substitute for it.
+const fontCSS = `
+  @font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-display: swap; src: url("/fonts/IBMPlexMono-Regular.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-display: swap; src: url("/fonts/IBMPlexMono-SemiBold.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-display: swap; src: url("/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-display: swap; src: url("/fonts/IBMPlexSans-SemiBold.woff2") format("woff2"); }
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 "IBM Plex Mono", monospace; }
+  b, strong { font-weight: 600; }
+`
 
 // safeName reports whether a request names a transcript in the log directory
 // and nothing else.
@@ -351,9 +399,8 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>claudeflow transcripts{{with .Repo}} — {{.}}{{end}}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; }
+<style>` + fontCSS + `
+  body { margin: 2rem auto; max-width: 48rem; padding: 0 1rem; }
   h1 { font-size: 1rem; font-weight: 600; margin-bottom: 1.5rem; }
   ol { list-style: none; padding: 0; }
   li { display: flex; gap: 1rem; padding: .35rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
@@ -381,27 +428,61 @@ var viewTmpl = template.Must(template.New("view").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Name}}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem auto; max-width: 64rem; padding: 0 1rem; }
+<style>` + fontCSS + `
+  body { margin: 2rem auto; max-width: 64rem; padding: 0 1rem; }
   header { display: flex; flex-wrap: wrap; gap: 1rem; font-weight: 600; margin-bottom: 1.5rem; }
-  header a, header span { font-weight: 400; opacity: .6; }
+  header a, header span, header button { font-weight: 400; opacity: .6; }
+  header button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+  time { cursor: pointer; }
   header .name { flex: 1; font-weight: 600; opacity: 1; overflow-wrap: anywhere; }
-  .ev { padding: .2rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .sub { border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); margin-left: .25rem; padding-left: .75rem; }
-  .say { font-family: system-ui, sans-serif; padding: .6rem 0; }
+  .ev { display: grid; grid-template-columns: 5em minmax(0, 1fr); column-gap: .75rem; padding: .2rem 0; }
+  .t { font-family: "IBM Plex Mono", monospace; opacity: .45; white-space: nowrap; }
+  .b { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sub .b { border-left: 2px solid color-mix(in srgb, currentColor 25%, transparent); padding-left: .75rem; }
+  .say { font-family: "IBM Plex Sans", sans-serif; padding: .6rem 0; }
+  @media (max-width: 40rem) {
+    .ev { display: block; }
+    .t { display: block; font-size: .85em; }
+    .t:empty { display: none; }
+  }
   .plain, .note, .output { opacity: .65; }
   .error { color: #d1242f; opacity: 1; }
   summary { cursor: pointer; }
   pre { font: inherit; margin: .25rem 0 .5rem; max-height: 32rem; overflow: auto; padding: .5rem; white-space: pre-wrap;
         background: color-mix(in srgb, currentColor 7%, transparent); }
 </style>
-<header><span class="name">{{.Name}}</span>{{with .Repo}}<span>{{.}}</span>{{end}}<span id="state">{{if .Done}}finished{{else}}following{{end}}</span><a href="?raw">raw</a><a href="/">all runs</a></header>
+<header><span class="name">{{.Name}}</span>{{with .Repo}}<span>{{.}}</span>{{end}}<span id="state">{{if .Done}}finished{{else}}following{{end}}</span><button id="zone" type="button" title="Switch times between UTC and local time">UTC</button><a href="?raw">raw</a><a href="/">all runs</a></header>
 <main id="log" data-next="{{.Next}}"{{if .Done}} data-done{{end}}>
 {{.Events}}</main>
 <script>
   const log = document.getElementById('log'), state = document.getElementById('state');
   let next = Number(log.dataset.next);
+  // The server writes times in UTC. The page shows them in the reader's zone,
+  // or in UTC after a click on any time or on the switch in the header; the
+  // choice is kept per browser, where storage allows it.
+  const zoneButton = document.getElementById('zone');
+  let utc = false;
+  try { utc = localStorage.getItem('claudeflow-zone') === 'utc'; } catch {}
+  function show(t) {
+    const d = new Date(t.dateTime);
+    if (isNaN(d)) return;
+    const timeZone = utc ? 'UTC' : undefined;
+    t.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone });
+    t.title = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'long', timeZone }) + ' (click for ' + (utc ? 'local time' : 'UTC') + ')';
+    t.dataset.shown = '';
+  }
+  function localize(all) {
+    for (const t of log.querySelectorAll(all ? 'time' : 'time:not([data-shown])')) show(t);
+    zoneButton.textContent = utc ? 'UTC' : 'local time';
+  }
+  function switchZone() {
+    utc = !utc;
+    try { localStorage.setItem('claudeflow-zone', utc ? 'utc' : 'local'); } catch {}
+    localize(true);
+  }
+  zoneButton.addEventListener('click', switchZone);
+  log.addEventListener('click', (e) => { if (e.target.closest('time')) switchZone(); });
+  localize(true);
   async function poll() {
     try {
       const res = await fetch(location.pathname + '?from=' + next);
@@ -410,6 +491,7 @@ var viewTmpl = template.Must(template.New("view").Parse(`<!doctype html>
         const page = document.documentElement;
         const atEnd = innerHeight + scrollY >= page.scrollHeight - 80;
         log.insertAdjacentHTML('beforeend', await res.text());
+        localize(false);
         next = Number(res.headers.get('X-Next-Offset'));
         if (atEnd) scrollTo(0, page.scrollHeight);
         if (res.headers.has('X-Run-Done')) { state.textContent = 'finished'; return; }
