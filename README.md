@@ -392,7 +392,7 @@ checkout left running, which claudeflow's own records cannot.
 | Command | What it does |
 | --- | --- |
 | `claudeflow init` | write a starter `claudeflow.yaml` here, filling in what the checkout and `gh` already know. Refuses to overwrite one |
-| `claudeflow serve` | the supervisor: ticks on a loop, dispatches runs, reaps finished ones |
+| `claudeflow serve` | the supervisor: ticks on a loop, dispatches runs, reaps finished ones. Ticks every `-interval` (2m), and sooner when a cheap check every `-watch` (15s) sees an issue opened, labelled or commented on |
 | `claudeflow once` | run a single tick and exit. Use this to try a configuration before running `serve` |
 | `claudeflow status` | what is live, which slots are held, whether dispatch is paused |
 | `claudeflow pause` | stop dispatching new runs. Live runs continue |

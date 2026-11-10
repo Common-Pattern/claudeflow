@@ -252,7 +252,8 @@ func logf(format string, args ...any) {
 
 func serve(ctx context.Context, cfg config.Config, st *state.Store, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	interval := fs.Duration("interval", 2*time.Minute, "how often to tick")
+	interval := fs.Duration("interval", 2*time.Minute, "longest wait between ticks")
+	watch := fs.Duration("watch", 15*time.Second, "how often to ask GitHub whether anything changed; 0 waits out the interval")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -261,7 +262,29 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 	if cfg.Transcripts.Enabled() {
 		go serveTranscripts(ctx, cfg, st)
 	}
-	logf("claudeflow %s supervising %s every %s", version, cfg.Repo, *interval)
+	gh := forge.NewGH(cfg.Repo)
+	var etag string
+	waker := tick.Waker{
+		Interval: *interval,
+		Every:    *watch,
+		Changed: func(ctx context.Context) (bool, error) {
+			next, changed, err := gh.IssuesChanged(ctx, etag)
+			etag = next
+			return changed, err
+		},
+		Log: logf,
+	}
+	if *watch > 0 {
+		// Take the baseline before the first tick, so that the first check
+		// compares against something and a change made during that tick is
+		// still seen. A failure here only means the first check ticks early.
+		if next, _, err := gh.IssuesChanged(ctx, ""); err == nil {
+			etag = next
+		}
+		logf("claudeflow %s supervising %s every %s, sooner on a change (checked every %s)", version, cfg.Repo, *interval, *watch)
+	} else {
+		logf("claudeflow %s supervising %s every %s", version, cfg.Repo, *interval)
+	}
 
 	// Tick immediately rather than waiting out the first interval: a restart
 	// should re-adopt and reap straight away, not minutes later.
@@ -269,11 +292,13 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 		if err := e.Once(ctx); err != nil {
 			logf("tick failed: %v", err)
 		}
-		select {
-		case <-ctx.Done():
+		early, err := waker.Wait(ctx)
+		if err != nil {
 			logf("shutting down; live runs are left running")
 			return nil
-		case <-time.After(*interval):
+		}
+		if early {
+			logf("change on GitHub; ticking early")
 		}
 	}
 }
