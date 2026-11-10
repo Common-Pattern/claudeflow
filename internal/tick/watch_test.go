@@ -81,14 +81,15 @@ func TestRequeueDoesNotFireTwiceForOneComment(t *testing.T) {
 	}
 }
 
-// A live run is already reading the whole thread; re-queueing underneath it
-// would start a second run on one issue.
-func TestRequeueSkipsAWorkingIssueButStillAdvancesTheMarker(t *testing.T) {
-	w, f, _ := newWatcher(t)
-	f.AddIssue(10, epoch, "claude:working")
-	f.SetLastSpoke(forge.TargetIssue, 10, epoch)
-	if _, err := w.Requeue(t.Context()); err != nil {
-		t.Fatalf("Requeue: %v", err)
+// A comment posted while a run works must not start a second run under it,
+// and must not be lost either: the run read the thread when it began, so the
+// comment is acted on once the run lets go of the issue.
+func TestRequeueHoldsACommentMadeDuringARunUntilItEnds(t *testing.T) {
+	w, f, st := newWatcher(t)
+	f.AddIssue(10, epoch, "claude", "claude:working")
+	// Where Start leaves the marker: the thread as the run found it.
+	if err := st.MarkSeen(issueKey(10), epoch); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
 	}
 
 	f.SetLastSpoke(forge.TargetIssue, 10, epoch.Add(time.Hour))
@@ -100,12 +101,14 @@ func TestRequeueSkipsAWorkingIssueButStillAdvancesTheMarker(t *testing.T) {
 		t.Errorf("re-queued %v while a run is live, want none", got)
 	}
 
-	// The marker advanced, so the same comment must not fire once the run ends.
 	if err := f.EditLabels(t.Context(), 10, []string{"claude:landed"}, []string{"claude:working"}); err != nil {
 		t.Fatalf("EditLabels: %v", err)
 	}
+	if got, _ := w.Requeue(t.Context()); len(got) != 1 || got[0] != 10 {
+		t.Fatalf("re-queued %v after the run ended, want [10]: the comment reached no run", got)
+	}
 	if got, _ := w.Requeue(t.Context()); len(got) != 0 {
-		t.Errorf("re-queued %v after the run ended; that comment was already seen", got)
+		t.Errorf("re-queued %v a second time for one comment, want none", got)
 	}
 }
 

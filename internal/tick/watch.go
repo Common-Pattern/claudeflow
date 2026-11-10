@@ -46,6 +46,20 @@ func (w Watcher) Requeue(ctx context.Context) ([]int, error) {
 		if w.Cfg.HumanMerges() && issue.HasLabel(l.Review) {
 			continue
 		}
+		// Re-queueing underneath a live run would start a second run on the
+		// same issue, so an issue under one is left alone — and so is its
+		// marker. The run read the thread once, when it began; a comment
+		// posted since has reached nobody. Leaving the marker where the run's
+		// start put it keeps that comment new, so it is acted on once the run
+		// lets go of the issue: re-queued here if the run ended with an
+		// outcome, or as a revision if it left a pull request for review.
+		//
+		// This used to advance the marker anyway, on the belief that the run
+		// was reading the whole thread. It had read it, past tense, and every
+		// instruction given while it worked was marked seen and dropped.
+		if issue.HasLabel(l.Working) {
+			continue
+		}
 		latest, err := w.Client.LatestCommentBy(ctx, forge.TargetIssue, issue.Number, w.Cfg.User)
 		if err != nil {
 			return nil, fmt.Errorf("read comments on #%d: %w", issue.Number, err)
@@ -54,10 +68,7 @@ func (w Watcher) Requeue(ctx context.Context) ([]int, error) {
 		if err != nil {
 			return nil, err
 		}
-		// A live run is already reading the whole thread, so re-queueing
-		// underneath it would start a second run on the same issue. The marker
-		// is still advanced above, so the comment is not replayed later.
-		if !isNew || issue.HasLabel(l.Working) {
+		if !isNew {
 			continue
 		}
 		// Clear the outcome; the queued label is already there and stays.
