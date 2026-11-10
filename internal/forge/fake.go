@@ -17,7 +17,10 @@ type Fake struct {
 	Comments map[int][]string
 	// LastSpoke keys a target and number to when the watched user last posted.
 	LastSpoke map[string]time.Time
-	Standing  []int
+	// Said holds the watched user's comments by target and number, for
+	// CommentsBy. Say adds to it and keeps LastSpoke in step.
+	Said     map[string][]Comment
+	Standing []int
 	// StandingErr, when set, is returned by StandingPR instead of Standing.
 	StandingErr error
 	ChecksBy    map[int][]Check
@@ -44,7 +47,7 @@ type Fake struct {
 func NewFake() *Fake {
 	return &Fake{
 		Issues: map[int]*Issue{}, Comments: map[int][]string{},
-		LastSpoke: map[string]time.Time{}, ChecksBy: map[int][]Check{},
+		LastSpoke: map[string]time.Time{}, Said: map[string][]Comment{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
 		PRByBranch: map[string]int{}, States: map[int]PRState{}, Behind: map[string]int{},
 	}
@@ -165,6 +168,33 @@ func (f *Fake) LatestCommentBy(_ context.Context, target Target, number int, _ s
 		return time.Time{}, f.Err
 	}
 	return f.LastSpoke[fmt.Sprintf("%s-%d", target, number)], nil
+}
+
+// Say records a comment from the watched user on a thread.
+func (f *Fake) Say(target Target, number int, at time.Time, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := fmt.Sprintf("%s-%d", target, number)
+	f.Said[key] = append(f.Said[key], Comment{At: at, Where: key, Body: body})
+	if at.After(f.LastSpoke[key]) {
+		f.LastSpoke[key] = at
+	}
+}
+
+// CommentsBy implements Client.
+func (f *Fake) CommentsBy(_ context.Context, target Target, number int, _ string, since time.Time) ([]Comment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	var out []Comment
+	for _, c := range f.Said[fmt.Sprintf("%s-%d", target, number)] {
+		if c.At.After(since) {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // StandingPR implements Client.

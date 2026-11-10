@@ -292,7 +292,7 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 
 	args := []string{
 		"-p", prompt,
-		"--append-system-prompt", string(instructions),
+		"--append-system-prompt", withInbox(r.Kind, instructions),
 		"--permission-mode", "bypassPermissions",
 		"--output-format", "stream-json",
 		"--verbose",
@@ -301,6 +301,14 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 		args = append(args, "--model", e.Cfg.Agent.Model)
 	}
 	args = append(args, e.Cfg.Agent.ExtraArgs...)
+	inboxEnv, inboxFlags := e.inboxArgs(r)
+	args = append(args, inboxFlags...)
+	// The parked run was settled when its last agent exited; anything still
+	// there is stale, and the comments it held are past the seen marker and
+	// will be left again for this agent.
+	if err := e.Store.ClearInbox(r.ID()); err != nil {
+		return err
+	}
 
 	logPath := filepath.Join(e.Store.LogDir(),
 		fmt.Sprintf("%s-%s.log", logName, e.now().UTC().Format("20060102T150405")))
@@ -308,6 +316,9 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 	env := e.runEnv(ctx, Start{Kind: r.Kind, Ref: r.Ref, Slot: r.Slot}, r)
 	env["CLAUDEFLOW_PR"] = strconv.Itoa(r.PR)
 	for k, v := range extra {
+		env[k] = v
+	}
+	for k, v := range inboxEnv {
 		env[k] = v
 	}
 

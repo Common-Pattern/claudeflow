@@ -344,3 +344,32 @@ func TestReviewNotesAgainForANewHead(t *testing.T) {
 		t.Errorf("first note = %q, want the singular", f.Comments[200][0])
 	}
 }
+
+// A comment on the issue while its run is working — here, while its pull
+// request waits on checks — is the operator changing their mind about work in
+// flight. It must survive the ticks that pass over the working issue and ask
+// for a revision once the pull request is up for review.
+func TestCommentDuringARunAsksForARevisionOnceItIsInReview(t *testing.T) {
+	e, f := newHumanEngine(t)
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
+	f.ChecksBy[200] = green()
+	f.HeadSHA[200] = "abcdef1234"
+	awaiting(t, e, 7, 200, 0)
+	_ = e.Store.MarkSeen(reviewKey(200), epoch)
+	_ = e.Store.MarkSeen(issueKey(7), epoch)
+
+	f.SetLastSpoke(forge.TargetIssue, 7, epoch.Add(time.Hour))
+	w := Watcher{Client: f, Store: e.Store, Cfg: e.Cfg}
+	for range 2 {
+		if got, err := w.Requeue(t.Context()); err != nil || len(got) != 0 {
+			t.Fatalf("Requeue = %v, %v; want nothing re-queued under a live run", got, err)
+		}
+	}
+
+	if err := e.advanceAwaitingCI(t.Context()); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if owed, err := e.revisionOwed(t.Context(), onlyRun(t, e)); err != nil || !owed {
+		t.Fatalf("revisionOwed = %v, %v; the comment made during the run was dropped", owed, err)
+	}
+}

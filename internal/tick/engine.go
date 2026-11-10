@@ -80,6 +80,9 @@ func (e Engine) Once(ctx context.Context) error {
 	if err := e.Reap(ctx); err != nil {
 		return err
 	}
+	// Before anything that dispatch blocks: a comment for a run already going
+	// is not new work, and a pause must not keep it from the agent.
+	e.deliverInbox(ctx)
 	// Runs waiting on checks are advanced before anything new is dispatched:
 	// landing finished work matters more than starting more of it, and a
 	// landed run frees nothing until it is resolved.
@@ -227,6 +230,7 @@ func (e Engine) Reap(ctx context.Context) error {
 			continue
 		}
 		e.logf("%s: run finished", r.ID())
+		e.settleInbox(r)
 
 		// A revision whose pull request the operator merged or closed while
 		// it ran has nothing left to wait on. Without this it finds no open
@@ -418,6 +422,11 @@ func (e Engine) start(ctx context.Context, s Start) error {
 	}
 
 	run := state.Run{Kind: s.Kind, Ref: s.Ref, Slot: s.Slot, Started: e.now()}
+	// An inbox left by a run that was never settled — a supervisor killed
+	// mid-reap — holds comments this run is about to read for itself.
+	if err := e.Store.ClearInbox(run.ID()); err != nil {
+		return err
+	}
 	run.Log = filepath.Join(e.Store.LogDir(), fmt.Sprintf("%s-%s.log", run.ID(), e.now().UTC().Format("20060102T150405")))
 
 	if s.Kind.HoldsSlot() {
@@ -449,6 +458,12 @@ func (e Engine) start(ctx context.Context, s Start) error {
 	if err != nil {
 		return err
 	}
+	inboxEnv, inboxFlags := e.inboxArgs(run)
+	args = append(args, inboxFlags...)
+	env := e.runEnv(ctx, s, run)
+	for k, v := range inboxEnv {
+		env[k] = v
+	}
 
 	// Started is what re-adoption checks the pid's kernel start time against,
 	// so it is stamped at the fork. Stamped before prepare, it sat minutes early
@@ -459,7 +474,7 @@ func (e Engine) start(ctx context.Context, s Start) error {
 		Command: e.Cfg.Agent.Command,
 		Args:    args,
 		Dir:     dir,
-		Env:     e.runEnv(ctx, s, run),
+		Env:     env,
 		Timeout: timeout,
 		LogPath: run.Log,
 	})
@@ -627,7 +642,7 @@ func (e Engine) agentArgs(s Start) ([]string, error) {
 
 	args := []string{
 		"-p", prompt,
-		"--append-system-prompt", string(instructions),
+		"--append-system-prompt", withInbox(s.Kind, instructions),
 		"--permission-mode", "bypassPermissions",
 		"--output-format", "stream-json",
 		"--verbose",

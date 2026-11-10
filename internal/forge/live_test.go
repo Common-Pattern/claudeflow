@@ -189,3 +189,27 @@ func TestLiveBehindBy(t *testing.T) {
 		t.Errorf("BehindBy(%s, %s) = %d, want 0", sha, sha, behind)
 	}
 }
+
+// gh exits non-zero on a 304, so this is the test that notices if it stops
+// printing the response head when it does.
+func TestLiveIssuesChanged(t *testing.T) {
+	g, _ := liveClient(t)
+
+	etag, changed, err := g.IssuesChanged(t.Context(), "")
+	if err != nil {
+		t.Fatalf("first IssuesChanged: %v", err)
+	}
+	if !changed || etag == "" {
+		t.Fatalf("first IssuesChanged = %q, %v; want an ETag and a change", etag, changed)
+	}
+	again, changed, err := g.IssuesChanged(t.Context(), etag)
+	if err != nil {
+		t.Fatalf("second IssuesChanged: %v", err)
+	}
+	if changed {
+		t.Logf("note: the repository changed between two requests; rerun to check the 304 path")
+	}
+	if again == "" {
+		t.Error("second IssuesChanged lost the ETag")
+	}
+}

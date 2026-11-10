@@ -165,6 +165,23 @@ lands the fixes. Review runs are scheduled ahead of new issues — someone is
 waiting on those, and wrong work already on the integration branch matters more
 than work that has not started.
 
+### A comment during a run reaches the run
+
+A run reads its thread when it begins, but you can keep talking. A comment on
+the issue while a run is working — or on its pull request, when you are the
+one who merges — is handed to the agent within a tick (seconds, with
+`serve -watch`), at its next tool call. If it lands after the agent's last
+tool call, the agent is turned back from finishing until it has read it. The
+agent is told such a comment outranks its plan.
+
+This goes through the agent CLI's hooks, passed with `--settings` as each run
+starts; nothing is written into the checkout. Each tick leaves new comments in
+`<state>/inbox/<run>/`, and the hooks run `claudeflow inbox`, which only reads
+files. A comment the agent never saw — the run had already ended, or was
+waiting on checks with no agent alive — is still acted on afterwards, as if
+the run had not been there: the issue is re-queued, or the pull request
+revised.
+
 ## Configuration
 
 claudeflow reads one YAML file. Every key not shown has a default.
@@ -392,7 +409,7 @@ checkout left running, which claudeflow's own records cannot.
 | Command | What it does |
 | --- | --- |
 | `claudeflow init` | write a starter `claudeflow.yaml` here, filling in what the checkout and `gh` already know. Refuses to overwrite one |
-| `claudeflow serve` | the supervisor: ticks on a loop, dispatches runs, reaps finished ones |
+| `claudeflow serve` | the supervisor: ticks on a loop, dispatches runs, reaps finished ones. Ticks every `-interval` (2m), and sooner when a cheap check every `-watch` (15s) sees an issue opened, labelled or commented on |
 | `claudeflow once` | run a single tick and exit. Use this to try a configuration before running `serve` |
 | `claudeflow status` | what is live, which slots are held, whether dispatch is paused |
 | `claudeflow pause` | stop dispatching new runs. Live runs continue |

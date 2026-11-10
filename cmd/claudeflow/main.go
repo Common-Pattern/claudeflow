@@ -26,6 +26,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
 	"github.com/Common-Pattern/claudeflow/internal/housekeep"
+	"github.com/Common-Pattern/claudeflow/internal/inbox"
 	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
@@ -59,6 +60,7 @@ Commands:
   doctor         check dependencies, authentication and configuration
   labels         create or update the labels in the repository
   version        print version information
+  inbox          (run by a run's agent hooks) hand over comments made during it
 
 Flags:
   -c path        config file (default: claudeflow.yaml, then .claudeflow.yaml)
@@ -86,6 +88,13 @@ func run() error {
 	if cmd == "version" {
 		fmt.Printf("claudeflow %s (%s, built %s)\n", version, commit, date)
 		return nil
+	}
+
+	// inbox is run by the agent CLI's hooks inside a run, from the run's
+	// worktree, where no config file is to be found. Everything it needs is in
+	// CLAUDEFLOW_INBOX.
+	if cmd == "inbox" {
+		return runInbox()
 	}
 
 	// init comes before the config is loaded, for the obvious reason.
@@ -252,7 +261,8 @@ func logf(format string, args ...any) {
 
 func serve(ctx context.Context, cfg config.Config, st *state.Store, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	interval := fs.Duration("interval", 2*time.Minute, "how often to tick")
+	interval := fs.Duration("interval", 2*time.Minute, "longest wait between ticks")
+	watch := fs.Duration("watch", 15*time.Second, "how often to ask GitHub whether anything changed; 0 waits out the interval")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -261,7 +271,29 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 	if cfg.Transcripts.Enabled() {
 		go serveTranscripts(ctx, cfg, st)
 	}
-	logf("claudeflow %s supervising %s every %s", version, cfg.Repo, *interval)
+	gh := forge.NewGH(cfg.Repo)
+	var etag string
+	waker := tick.Waker{
+		Interval: *interval,
+		Every:    *watch,
+		Changed: func(ctx context.Context) (bool, error) {
+			next, changed, err := gh.IssuesChanged(ctx, etag)
+			etag = next
+			return changed, err
+		},
+		Log: logf,
+	}
+	if *watch > 0 {
+		// Take the baseline before the first tick, so that the first check
+		// compares against something and a change made during that tick is
+		// still seen. A failure here only means the first check ticks early.
+		if next, _, err := gh.IssuesChanged(ctx, ""); err == nil {
+			etag = next
+		}
+		logf("claudeflow %s supervising %s every %s, sooner on a change (checked every %s)", version, cfg.Repo, *interval, *watch)
+	} else {
+		logf("claudeflow %s supervising %s every %s", version, cfg.Repo, *interval)
+	}
 
 	// Tick immediately rather than waiting out the first interval: a restart
 	// should re-adopt and reap straight away, not minutes later.
@@ -269,11 +301,13 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 		if err := e.Once(ctx); err != nil {
 			logf("tick failed: %v", err)
 		}
-		select {
-		case <-ctx.Done():
+		early, err := waker.Wait(ctx)
+		if err != nil {
 			logf("shutting down; live runs are left running")
 			return nil
-		case <-time.After(*interval):
+		}
+		if early {
+			logf("change on GitHub; ticking early")
 		}
 	}
 }
@@ -528,4 +562,18 @@ func lockFile(path string) (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
+}
+
+// runInbox answers one agent hook call. It never fails the hook: an error is
+// reported on stderr, which the agent CLI keeps out of the agent's context,
+// and the tool call or finish it was attached to goes ahead.
+func runInbox() error {
+	dir := os.Getenv("CLAUDEFLOW_INBOX")
+	if dir == "" {
+		return nil
+	}
+	if err := inbox.Hook(dir, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "claudeflow inbox:", err)
+	}
+	return nil
 }

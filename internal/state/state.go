@@ -124,6 +124,18 @@ func (s *Store) Dir() string { return s.dir }
 // LogDir returns where run transcripts are written.
 func (s *Store) LogDir() string { return filepath.Join(s.dir, "logs") }
 
+// InboxDir returns where comments the operator makes during a run are left
+// for it. See package inbox.
+func (s *Store) InboxDir(id string) string { return filepath.Join(s.dir, "inbox", id) }
+
+// ClearInbox removes a run's inbox.
+func (s *Store) ClearInbox(id string) error {
+	if err := os.RemoveAll(s.InboxDir(id)); err != nil {
+		return fmt.Errorf("clear inbox %s: %w", id, err)
+	}
+	return nil
+}
+
 func (s *Store) runPath(id string) string   { return filepath.Join(s.dir, "runs", id+".json") }
 func (s *Store) seenPath(key string) string { return filepath.Join(s.dir, "seen", key) }
 
@@ -172,6 +184,9 @@ func (s *Store) Runs() ([]Run, error) {
 
 // DeleteRun removes a run record. Removing one that is already gone succeeds.
 func (s *Store) DeleteRun(id string) error {
+	if err := s.ClearInbox(id); err != nil {
+		return err
+	}
 	err := os.Remove(s.runPath(id))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete run %s: %w", id, err)
@@ -207,6 +222,19 @@ func (s *Store) NoteLatest(key string, latest time.Time) (isNew bool, err error)
 		return false, nil
 	}
 	return true, s.MarkSeen(key, latest)
+}
+
+// Seen returns a thread's recorded position, and whether it has one.
+func (s *Store) Seen(key string) (time.Time, bool) {
+	raw, err := os.ReadFile(s.seenPath(key))
+	if err != nil {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(raw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 // MarkSeen records a thread's position without acting on it.
