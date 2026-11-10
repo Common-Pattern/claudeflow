@@ -165,6 +165,23 @@ lands the fixes. Review runs are scheduled ahead of new issues — someone is
 waiting on those, and wrong work already on the integration branch matters more
 than work that has not started.
 
+### A comment during a run reaches the run
+
+A run reads its thread when it begins, but you can keep talking. A comment on
+the issue while a run is working — or on its pull request, when you are the
+one who merges — is handed to the agent within a tick (seconds, with
+`serve -watch`), at its next tool call. If it lands after the agent's last
+tool call, the agent is turned back from finishing until it has read it. The
+agent is told such a comment outranks its plan.
+
+This goes through the agent CLI's hooks, passed with `--settings` as each run
+starts; nothing is written into the checkout. Each tick leaves new comments in
+`<state>/inbox/<run>/`, and the hooks run `claudeflow inbox`, which only reads
+files. A comment the agent never saw — the run had already ended, or was
+waiting on checks with no agent alive — is still acted on afterwards, as if
+the run had not been there: the issue is re-queued, or the pull request
+revised.
+
 ## Configuration
 
 claudeflow reads one YAML file. Every key not shown has a default.

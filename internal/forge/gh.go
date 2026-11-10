@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -180,18 +181,38 @@ func (g *GH) Comment(ctx context.Context, number int, body string) error {
 }
 
 // LatestCommentBy implements Client.
+func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, user string) (time.Time, error) {
+	comments, err := g.CommentsBy(ctx, target, number, user, time.Time{})
+	if err != nil {
+		return time.Time{}, err
+	}
+	var latest time.Time
+	for _, c := range comments {
+		if c.At.After(latest) {
+			latest = c.At
+		}
+	}
+	return latest, nil
+}
+
+// CommentsBy implements Client.
 //
 // Two of the three comment streams have a gh subcommand and are read through
 // it; only inline review comments have none, and that one call is the reason
 // `gh api` appears in this package at all. Subcommands carry gh's own field
 // resolution and stay correct across API versions, where a hand-built endpoint
 // path does not.
-func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, user string) (time.Time, error) {
-	var latest time.Time
-	note := func(at time.Time) {
-		if at.After(latest) {
-			latest = at
+func (g *GH) CommentsBy(ctx context.Context, target Target, number int, user string, since time.Time) ([]Comment, error) {
+	var out []Comment
+	keep := func(login, body string, at time.Time, c Comment) {
+		// The agent posts through these same credentials, so its own comments
+		// arrive authored by the configured user. Only the marker separates
+		// them.
+		if login != user || IsAgentComment(body) || !at.After(since) {
+			return
 		}
+		c.At, c.Body = at, body
+		out = append(out, c)
 	}
 
 	verb := "issue"
@@ -201,26 +222,28 @@ func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, use
 	}
 	raw, err := g.run(ctx, verb, "view", strconv.Itoa(number), "--repo", g.Repo, "--json", fields)
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
 	}
 	var view struct {
 		Comments []ghViewComment `json:"comments"`
 		Reviews  []ghViewComment `json:"reviews"`
 	}
 	if err := json.Unmarshal(raw, &view); err != nil {
-		return time.Time{}, fmt.Errorf("decode %s view: %w", verb, err)
+		return nil, fmt.Errorf("decode %s view: %w", verb, err)
 	}
-	for _, c := range append(view.Comments, view.Reviews...) {
-		// The agent posts through these same credentials, so its own comments
-		// arrive authored by the configured user. Only the marker separates
-		// them.
-		if c.Author.Login == user && !IsAgentComment(c.Body) {
-			note(c.at())
-		}
+	where := fmt.Sprintf("issue #%d", number)
+	if target == TargetPR {
+		where = fmt.Sprintf("pull request #%d", number)
+	}
+	for _, c := range view.Comments {
+		keep(c.Author.Login, c.Body, c.at(), Comment{Where: where, URL: c.URL})
+	}
+	for _, c := range view.Reviews {
+		keep(c.Author.Login, c.Body, c.at(), Comment{Where: "a review on " + where})
 	}
 
 	if target != TargetPR {
-		return latest, nil
+		return sortComments(out), nil
 	}
 
 	// Inline review comments: no subcommand exposes these, so the raw endpoint
@@ -228,14 +251,25 @@ func (g *GH) LatestCommentBy(ctx context.Context, target Target, number int, use
 	rawInline, err := g.run(ctx, "api", "--paginate",
 		fmt.Sprintf("repos/%s/pulls/%d/comments", g.Repo, number))
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
 	}
-	at, err := latestBy(rawInline, user)
+	inline, err := decodePages(rawInline)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("inline review comments: %w", err)
+		return nil, fmt.Errorf("inline review comments: %w", err)
 	}
-	note(at)
-	return latest, nil
+	for _, c := range inline {
+		w := fmt.Sprintf("%s, on %s", where, c.Path)
+		if c.Line != nil {
+			w += ":" + strconv.Itoa(*c.Line)
+		}
+		keep(c.User.Login, c.Body, c.at(), Comment{Where: w, URL: c.HTMLURL})
+	}
+	return sortComments(out), nil
+}
+
+func sortComments(cs []Comment) []Comment {
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].At.Before(cs[j].At) })
+	return cs
 }
 
 // ghViewComment is the shape gh's own subcommands return, which differs from
@@ -250,6 +284,7 @@ type ghViewComment struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	Body        string     `json:"body"`
+	URL         string     `json:"url"`
 	CreatedAt   *time.Time `json:"createdAt"`
 	SubmittedAt *time.Time `json:"submittedAt"`
 }
@@ -269,6 +304,9 @@ type ghComment struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Body      string     `json:"body"`
+	HTMLURL   string     `json:"html_url"`
+	Path      string     `json:"path"`
+	Line      *int       `json:"line"`
 	CreatedAt *time.Time `json:"created_at"`
 	// A review carries submitted_at and a null created_at, so reading only
 	// created_at silently misses every review the user left.
@@ -285,28 +323,40 @@ func (c ghComment) at() time.Time {
 	return time.Time{}
 }
 
+// latestBy returns when user last commented in a page of REST comments.
 func latestBy(raw []byte, user string) (time.Time, error) {
-	// --paginate concatenates one JSON array per page.
-	dec := json.NewDecoder(bytes.NewReader(raw))
+	comments, err := decodePages(raw)
+	if err != nil {
+		return time.Time{}, err
+	}
 	var latest time.Time
+	for _, c := range comments {
+		if c.User.Login != user || IsAgentComment(c.Body) {
+			continue
+		}
+		if at := c.at(); at.After(latest) {
+			latest = at
+		}
+	}
+	return latest, nil
+}
+
+// decodePages reads the output of `gh api --paginate`, which concatenates one
+// JSON array per page.
+func decodePages(raw []byte) ([]ghComment, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var all []ghComment
 	for {
 		var page []ghComment
 		if err := dec.Decode(&page); err != nil {
 			if strings.Contains(err.Error(), "EOF") {
 				break
 			}
-			return time.Time{}, fmt.Errorf("decode comments: %w", err)
+			return nil, fmt.Errorf("decode comments: %w", err)
 		}
-		for _, c := range page {
-			if c.User.Login != user || IsAgentComment(c.Body) {
-				continue
-			}
-			if at := c.at(); at.After(latest) {
-				latest = at
-			}
-		}
+		all = append(all, page...)
 	}
-	return latest, nil
+	return all, nil
 }
 
 // StandingPR implements Client.

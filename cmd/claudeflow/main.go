@@ -26,6 +26,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
 	"github.com/Common-Pattern/claudeflow/internal/housekeep"
+	"github.com/Common-Pattern/claudeflow/internal/inbox"
 	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
@@ -59,6 +60,7 @@ Commands:
   doctor         check dependencies, authentication and configuration
   labels         create or update the labels in the repository
   version        print version information
+  inbox          (run by a run's agent hooks) hand over comments made during it
 
 Flags:
   -c path        config file (default: claudeflow.yaml, then .claudeflow.yaml)
@@ -86,6 +88,13 @@ func run() error {
 	if cmd == "version" {
 		fmt.Printf("claudeflow %s (%s, built %s)\n", version, commit, date)
 		return nil
+	}
+
+	// inbox is run by the agent CLI's hooks inside a run, from the run's
+	// worktree, where no config file is to be found. Everything it needs is in
+	// CLAUDEFLOW_INBOX.
+	if cmd == "inbox" {
+		return runInbox()
 	}
 
 	// init comes before the config is loaded, for the obvious reason.
@@ -553,4 +562,18 @@ func lockFile(path string) (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
+}
+
+// runInbox answers one agent hook call. It never fails the hook: an error is
+// reported on stderr, which the agent CLI keeps out of the agent's context,
+// and the tool call or finish it was attached to goes ahead.
+func runInbox() error {
+	dir := os.Getenv("CLAUDEFLOW_INBOX")
+	if dir == "" {
+		return nil
+	}
+	if err := inbox.Hook(dir, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "claudeflow inbox:", err)
+	}
+	return nil
 }

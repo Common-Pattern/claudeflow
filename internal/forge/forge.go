@@ -176,6 +176,17 @@ func WithClosingRefs(body string, refs []int) string {
 	return strings.TrimRight(body, "\n") + "\n\n" + block + "\n"
 }
 
+// Comment is one instruction from the operator.
+type Comment struct {
+	At time.Time
+	// Where says where it was left: "issue #12", "a review on pull request
+	// #40", "pull request #40, on main.go:12".
+	Where string
+	// URL links to it, where GitHub gives one.
+	URL  string
+	Body string
+}
+
 // Client is everything claudeflow needs from the forge. It exists so the
 // orchestration can be tested without a network.
 type Client interface {
@@ -200,6 +211,10 @@ type Client interface {
 	// AgentMarker are skipped, because the agent posts as the same account. A
 	// thread with no instruction on it returns the zero time and no error.
 	LatestCommentBy(ctx context.Context, target Target, number int, user string) (time.Time, error)
+	// CommentsBy returns user's instructions on a thread posted after since,
+	// oldest first, from the same streams and with the same filtering as
+	// LatestCommentBy.
+	CommentsBy(ctx context.Context, target Target, number int, user string, since time.Time) ([]Comment, error)
 	// StandingPR returns the single open pull request from head into base.
 	StandingPR(ctx context.Context, base, head string) (int, error)
 	// PRForBranch returns the open pull request whose head is branch, or zero
