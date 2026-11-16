@@ -98,7 +98,7 @@ func TestWorktreeAddListRemove(t *testing.T) {
 		t.Fatalf("Worktrees = %d entries, want 2: %+v", len(worktrees), worktrees)
 	}
 	added := worktrees[1]
-	if !samePath(added.Path, path) {
+	if !SamePath(added.Path, path) {
 		t.Errorf("worktree path = %q, want %q", added.Path, path)
 	}
 	if added.Branch != "claude/issue-7" {
@@ -176,6 +176,45 @@ func TestAddWorktreeRejectsBranchCheckedOutElsewhere(t *testing.T) {
 	}
 }
 
+// A branch left checked out in one worktree is found by name and moved, with
+// its uncommitted work, to a new path; AddWorktree at the new path would have
+// failed with ErrBranchCheckedOut instead.
+func TestMoveWorktreeOnBranchKeepsUncommittedWork(t *testing.T) {
+	ctx := context.Background()
+	r := newRepo(t)
+	dir := t.TempDir()
+	old := filepath.Join(dir, "build-7-slot2")
+	if err := r.AddWorktree(ctx, old, "claude/build-7", "main"); err != nil {
+		t.Fatalf("AddWorktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "wip.txt"), []byte("draft"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	w, ok, err := r.WorktreeOnBranch(ctx, "claude/build-7")
+	if err != nil || !ok {
+		t.Fatalf("WorktreeOnBranch = %v, %v, %v; want the slot2 worktree", w, ok, err)
+	}
+	if !SamePath(w.Path, old) {
+		t.Fatalf("WorktreeOnBranch path = %s, want %s", w.Path, old)
+	}
+	if _, ok, _ := r.WorktreeOnBranch(ctx, "claude/nobody"); ok {
+		t.Fatalf("WorktreeOnBranch found a worktree for a branch nobody has checked out")
+	}
+
+	moved := filepath.Join(dir, "build-7-slot1")
+	if err := r.MoveWorktree(ctx, w.Path, moved); err != nil {
+		t.Fatalf("MoveWorktree: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(moved, "wip.txt")); err != nil || string(b) != "draft" {
+		t.Fatalf("uncommitted file after move = %q, %v; want it carried over", b, err)
+	}
+	w, ok, err = r.WorktreeOnBranch(ctx, "claude/build-7")
+	if err != nil || !ok || !SamePath(w.Path, moved) {
+		t.Fatalf("after move WorktreeOnBranch = %v, %v, %v; want %s", w, ok, err, moved)
+	}
+}
+
 func TestRemoveWorktreeUnknownPathSucceeds(t *testing.T) {
 	ctx := context.Background()
 	r := newRepo(t)
@@ -202,7 +241,7 @@ func TestPruneWorktrees(t *testing.T) {
 		t.Fatalf("Worktrees: %v", err)
 	}
 	for _, w := range worktrees {
-		if samePath(w.Path, path) {
+		if SamePath(w.Path, path) {
 			t.Fatalf("pruned worktree %s still registered", path)
 		}
 	}
@@ -270,7 +309,7 @@ func TestWorktreesReportsDetached(t *testing.T) {
 	}
 	var found *Worktree
 	for i := range worktrees {
-		if samePath(worktrees[i].Path, path) {
+		if SamePath(worktrees[i].Path, path) {
 			found = &worktrees[i]
 		}
 	}
@@ -528,7 +567,7 @@ func TestReclaimableWorktrees(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ReclaimableWorktrees = %+v, want only the merged claude/ worktree", got)
 	}
-	if !samePath(got[0].Path, mergedPrefixed) {
+	if !SamePath(got[0].Path, mergedPrefixed) {
 		t.Errorf("reclaimable worktree = %q, want %q", got[0].Path, mergedPrefixed)
 	}
 }

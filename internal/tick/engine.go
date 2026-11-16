@@ -506,10 +506,8 @@ func (e Engine) prepare(ctx context.Context, s Start, logPath string) (branch, w
 	if err := e.Repo.Fetch(ctx); err != nil {
 		e.logf("fetch before worktree: %v", err)
 	}
-	if _, statErr := os.Stat(worktree); statErr != nil {
-		if err := e.Repo.AddWorktree(ctx, worktree, branch, "origin/"+e.Cfg.Branches.Integration); err != nil {
-			return "", "", fmt.Errorf("create worktree: %w", err)
-		}
+	if err := e.ensureWorktree(ctx, worktree, branch); err != nil {
+		return "", "", err
 	}
 	// Install runs before the stack comes up: a Compose file that bind-mounts
 	// the worktree needs its dependencies already in place.
@@ -542,6 +540,52 @@ func (e Engine) prepare(ctx context.Context, s Start, logPath string) (branch, w
 		return "", "", fmt.Errorf("stack did not become ready: %w", err)
 	}
 	return branch, worktree, nil
+}
+
+// ensureWorktree leaves a worktree at path with branch checked out.
+//
+// The path carries the slot and the branch does not, so a run re-queued onto a
+// different slot finds its branch still checked out in the previous slot's
+// worktree: a run that stopped to ask a question is not merged, and
+// housekeeping keeps it. Git will not check a branch out twice, so that
+// worktree is moved to the new path rather than a second one added. A move
+// keeps whatever was left uncommitted, which removing and re-adding would lose.
+func (e Engine) ensureWorktree(ctx context.Context, path, branch string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	// Registrations whose directories are gone would otherwise be found below
+	// as the branch's home and fail the move.
+	if err := e.Repo.PruneWorktrees(ctx); err != nil {
+		e.logf("prune worktrees: %v", err)
+	}
+	w, ok, err := e.Repo.WorktreeOnBranch(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("create worktree: %w", err)
+	}
+	if ok && !git.SamePath(w.Path, path) {
+		live, err := e.liveRuns()
+		if err != nil {
+			return err
+		}
+		for _, r := range live {
+			if r.Worktree != "" && git.SamePath(r.Worktree, w.Path) {
+				return fmt.Errorf("create worktree: %s is checked out in %s, which %s is still using", branch, w.Path, r.ID())
+			}
+		}
+		e.logf("moving the worktree for %s from %s to %s", branch, w.Path, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("create worktree: %w", err)
+		}
+		if err := e.Repo.MoveWorktree(ctx, w.Path, path); err != nil {
+			return fmt.Errorf("create worktree: %w", err)
+		}
+		return nil
+	}
+	if err := e.Repo.AddWorktree(ctx, path, branch, "origin/"+e.Cfg.Branches.Integration); err != nil {
+		return fmt.Errorf("create worktree: %w", err)
+	}
+	return nil
 }
 
 // serviceURLs asks Compose which host port each exposed service landed on.

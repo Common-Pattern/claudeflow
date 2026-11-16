@@ -261,7 +261,7 @@ func (r *Repo) AddWorktree(ctx context.Context, path, branch, startPoint string)
 		return err
 	}
 	for _, w := range worktrees {
-		if samePath(w.Path, path) {
+		if SamePath(w.Path, path) {
 			return fmt.Errorf("add worktree %s: %w", path, ErrWorktreeExists)
 		}
 	}
@@ -285,6 +285,32 @@ func (r *Repo) AddWorktree(ctx context.Context, path, branch, startPoint string)
 	return nil
 }
 
+// WorktreeOnBranch returns the registered worktree that has branch checked out,
+// and false when none does. Git allows a branch in at most one worktree, so
+// there is never more than one to find.
+func (r *Repo) WorktreeOnBranch(ctx context.Context, branch string) (Worktree, bool, error) {
+	worktrees, err := r.Worktrees(ctx)
+	if err != nil {
+		return Worktree{}, false, err
+	}
+	for _, w := range worktrees {
+		if !w.Detached && w.Branch == branch {
+			return w, true, nil
+		}
+	}
+	return Worktree{}, false, nil
+}
+
+// MoveWorktree relocates a registered worktree to path, which must not exist.
+// What is uncommitted in it moves with it, which removing it and adding a new
+// one would discard.
+func (r *Repo) MoveWorktree(ctx context.Context, from, to string) error {
+	if _, err := r.Run(ctx, "worktree", "move", from, to); err != nil {
+		return fmt.Errorf("move worktree %s to %s: %w", from, to, err)
+	}
+	return nil
+}
+
 // RemoveWorktree deletes a worktree and its registration, discarding whatever
 // is uncommitted in it. A path that is not a registered worktree is already in
 // the wanted state and reports success.
@@ -299,7 +325,7 @@ func (r *Repo) RemoveWorktree(ctx context.Context, path string) error {
 			return fmt.Errorf("remove worktree %s: %w", path, err)
 		}
 		for _, w := range known {
-			if samePath(w.Path, path) {
+			if SamePath(w.Path, path) {
 				return fmt.Errorf("remove worktree %s: %w", path, err)
 			}
 		}
@@ -412,7 +438,7 @@ func ReclaimableWorktrees(ctx context.Context, r *Repo, worktrees []Worktree, pr
 		if w.Detached || w.Branch == "" || !strings.HasPrefix(w.Branch, prefix) {
 			continue
 		}
-		if samePath(w.Path, r.Root) {
+		if SamePath(w.Path, r.Root) {
 			continue
 		}
 		merged, err := r.IsAncestor(ctx, w.Branch, integration)
@@ -426,11 +452,11 @@ func ReclaimableWorktrees(ctx context.Context, r *Repo, worktrees []Worktree, pr
 	return out, nil
 }
 
-// samePath compares two paths for pointing at the same directory. Symlinks are
+// SamePath compares two paths for pointing at the same directory. Symlinks are
 // resolved where possible: a temporary directory is behind one on macOS, so a
 // path git reports and the path a caller passes can differ character by
 // character while naming the same worktree.
-func samePath(a, b string) bool {
+func SamePath(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
 	}
