@@ -173,6 +173,22 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// systemPrompt is what a run is given as --append-system-prompt: the skill,
+// then the project's note, then the inbox note when the run has an inbox.
+func (e Engine) systemPrompt(k state.Kind, instructions []byte) string {
+	return withInbox(k, withNote(instructions, e.Cfg.Agent.PromptNote))
+}
+
+// withNote appends the project's note under its own heading, so the agent can
+// tell where the shipped instructions end and the project's begin.
+func withNote(instructions []byte, note string) []byte {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return instructions
+	}
+	return []byte(strings.TrimRight(string(instructions), "\n") + "\n\n## About this project\n\n" + note + "\n")
+}
+
 // withInbox is the instructions a run is given, with the inbox note appended
 // when the run has one.
 func withInbox(k state.Kind, instructions []byte) string {

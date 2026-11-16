@@ -347,7 +347,7 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 
 	args := []string{
 		"-p", prompt,
-		"--append-system-prompt", withInbox(r.Kind, instructions),
+		"--append-system-prompt", e.systemPrompt(r.Kind, instructions),
 		"--permission-mode", "bypassPermissions",
 		"--output-format", "stream-json",
 		"--verbose",

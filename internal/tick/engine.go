@@ -686,7 +686,7 @@ func (e Engine) agentArgs(s Start) ([]string, error) {
 
 	args := []string{
 		"-p", prompt,
-		"--append-system-prompt", withInbox(s.Kind, instructions),
+		"--append-system-prompt", e.systemPrompt(s.Kind, instructions),
 		"--permission-mode", "bypassPermissions",
 		"--output-format", "stream-json",
 		"--verbose",
