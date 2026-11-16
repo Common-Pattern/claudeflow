@@ -23,6 +23,11 @@ import (
 var (
 	// ErrConflict means the integration branch conflicts with the work.
 	ErrConflict = errors.New("integration branch conflicts with this branch")
+	// ErrResynced means the branch had fallen behind, the integration branch
+	// was merged into it cleanly and pushed, and no waiter was configured to
+	// see the checks through. Nothing failed: the pushed head needs its own
+	// green before it lands, and the caller waits for that its own way.
+	ErrResynced = errors.New("branch resynced with the integration branch; checks must pass again")
 	// ErrChecksAfterSync means CI failed once the branch was brought up to date.
 	ErrChecksAfterSync = errors.New("checks failed after syncing with the integration branch")
 	// ErrChecksNotGreen means a required check is missing or not passing.
@@ -45,7 +50,8 @@ type Lander struct {
 	Cfg    config.Config
 	Client forge.Client
 	Repo   *git.Repo
-	// Wait blocks on CI. Required only when a branch has to be re-synced.
+	// Wait blocks on CI after a branch is re-synced. Without it, Land pushes
+	// the re-sync and returns ErrResynced for the caller to wait on its own.
 	Wait Waiter
 	// RunHook is optional; without it the install hook is skipped.
 	RunHook HookFunc
@@ -111,7 +117,7 @@ func (l Lander) Land(ctx context.Context, pr int, worktree string) (Result, erro
 		res.Resynced = true
 
 		if l.Wait == nil {
-			return res, fmt.Errorf("branch was resynced but no CI waiter is configured")
+			return res, ErrResynced
 		}
 		l.logf("pushed the merge; re-waiting on checks")
 		checks, err := l.Wait(ctx, pr)
