@@ -294,6 +294,12 @@ agent:
   model: opus
   # extraArgs: []
   # skillsDir: ./my-skills   # overrides the skills shipped in the binary
+  # Appended to every run's instructions, of every kind, under "About this
+  # project". For what only holds under claudeflow — the environment a run is
+  # given, and which interactive tooling to leave alone. Conventions that hold
+  # for anyone working in the repository belong in its CLAUDE.md instead.
+  # promptNote: |
+  #   Your environment is the Compose stack claudeflow brought up for you.
   # Extra environment for the run, expanded against the addresses above. This
   # is how a project points its own tooling at the run's containers. A test
   # harness that refuses to guess its database — the correct behaviour — has

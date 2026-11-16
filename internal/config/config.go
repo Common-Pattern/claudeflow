@@ -270,6 +270,13 @@ type Agent struct {
 	ExtraArgs []string `yaml:"extraArgs"`
 	// SkillsDir overrides the skills shipped with claudeflow.
 	SkillsDir string `yaml:"skillsDir"`
+	// PromptNote is project context appended to every run's instructions, of
+	// every kind. It is for what the agent cannot work out from the repository
+	// and that holds only under claudeflow — the environment it was given, and
+	// which of the project's own interactive tooling not to touch. It adds to
+	// the shipped skills rather than replacing one, so it does not drift from
+	// them the way a copied skill in SkillsDir would.
+	PromptNote string `yaml:"promptNote"`
 	// Env is extra environment for the run, expanded against the stack's
 	// resolved addresses — CLAUDEFLOW_PORT_<SERVICE>, CLAUDEFLOW_HOST_<SERVICE>
 	// and CLAUDEFLOW_URL_<SERVICE>.
