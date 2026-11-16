@@ -222,8 +222,8 @@ type Limits struct {
 	// working for.
 	RateLimitBackoff time.Duration `yaml:"rateLimitBackoff"`
 
-	// FixAttempts is how many times a run may push a fix at failing CI before
-	// giving up.
+	// FixAttempts is how many times a run may push a fix at failing CI, or a
+	// resolution of a conflict with the integration branch, before giving up.
 	FixAttempts int `yaml:"fixAttempts"`
 }
 

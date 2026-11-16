@@ -2,6 +2,7 @@ package tick
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,7 +93,15 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 		Required: e.Cfg.RequiredChecks,
 	}
 	res, err := l.Land(ctx, r.PR, r.Worktree)
-	if err != nil {
+	switch {
+	case errors.Is(err, land.ErrResynced):
+		// The merge of the integration branch is pushed. Its head has no
+		// checks yet, and this run goes on waiting for them like any other.
+		e.logf("%s: #%d was behind %s; merged it in and pushed, waiting on checks again", r.ID(), r.PR, e.Cfg.Branches.Integration)
+		return nil
+	case errors.Is(err, land.ErrConflict):
+		return e.handleConflict(ctx, r)
+	case err != nil:
 		e.logf("%s: could not land #%d: %v", r.ID(), r.PR, err)
 		return e.finishRun(ctx, r, e.Cfg.Labels.Blocked, fmt.Sprintf(
 			"Checks passed on #%d but landing did not complete:\n\n```\n%v\n```\n\nThe pull request is still open.", r.PR, err))
@@ -103,6 +112,52 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 		body += fmt.Sprintf("\n\nThe standing pull request will close this issue when it merges into `%s`.", e.Cfg.Branches.Base)
 	}
 	return e.finishRun(ctx, r, e.Cfg.Labels.Landed, body)
+}
+
+// handleConflict sends an agent to merge the integration branch into a green
+// pull request that no longer merges cleanly. A conflict is the ordinary cost
+// of two runs working at once, not a fault for the operator to resolve, so it
+// is handled the way red checks are: an agent with the problem in hand, under
+// the same attempt cap.
+func (e Engine) handleConflict(ctx context.Context, r state.Run) error {
+	integration := e.Cfg.Branches.Integration
+	if r.Attempts >= e.Cfg.Limits.FixAttempts {
+		e.logf("%s: #%d still conflicts with %s after %d attempt(s); giving up", r.ID(), r.PR, integration, r.Attempts)
+		return e.finishRun(ctx, r, e.Cfg.Labels.Blocked, fmt.Sprintf(
+			"Checks passed on #%d but it still conflicts with `%s` after %d attempt(s).\n\nThe pull request is open and the branch is intact; it needs a look.",
+			r.PR, integration, r.Attempts))
+	}
+	if liveFixFor(mustRuns(e), r.PR) {
+		return nil
+	}
+	slot, err := e.allocator().Free(ctx, claimedSlots(liveSlotRuns(mustRuns(e))))
+	if err != nil {
+		e.logf("%s: #%d conflicts with %s but no slot is free to resolve it", r.ID(), r.PR, integration)
+		return nil
+	}
+
+	r.Attempts++
+	r.Phase = state.PhaseRunning
+	r.Slot = slot
+	if err := e.Store.SaveRun(r); err != nil {
+		return err
+	}
+	e.logf("%s: #%d conflicts with %s; starting resolve attempt %d", r.ID(), r.PR, integration, r.Attempts)
+
+	prompt := fmt.Sprintf(
+		"Pull request #%d passed its checks but conflicts with origin/%s. Merge it in and resolve the conflicts, following the run instructions in your system prompt exactly. This is attempt %d of %d.",
+		r.PR, integration, r.Attempts, e.Cfg.Limits.FixAttempts)
+	if err := e.resume(ctx, r, skills.Resolve, prompt, fmt.Sprintf("resolve-%d", r.PR), runner.Env{
+		"CLAUDEFLOW_ATTEMPT": strconv.Itoa(r.Attempts),
+	}); err != nil {
+		r.Phase = state.PhaseAwaitingCI
+		r.Slot = 0
+		if serr := e.Store.SaveRun(r); serr != nil {
+			return serr
+		}
+		return fmt.Errorf("start conflict resolution for #%d: %w", r.PR, err)
+	}
+	return nil
 }
 
 // handleRedCI sends one agent at the failing checks, up to the configured cap.

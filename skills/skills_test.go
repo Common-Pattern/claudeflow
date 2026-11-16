@@ -34,6 +34,7 @@ func TestSkillsReferenceTheContract(t *testing.T) {
 		Planning: {"CLAUDEFLOW_ISSUE", "CLAUDEFLOW_LABEL_QUESTION"},
 		Fix:      {"CLAUDEFLOW_PR", "CLAUDEFLOW_FAILING_CHECKS", "CLAUDEFLOW_VERIFY"},
 		Revise:   {"CLAUDEFLOW_PR", "CLAUDEFLOW_ISSUE", "CLAUDEFLOW_USER", "CLAUDEFLOW_BRANCH", "CLAUDEFLOW_VERIFY"},
+		Resolve:  {"CLAUDEFLOW_PR", "CLAUDEFLOW_ISSUE", "CLAUDEFLOW_BRANCH", "CLAUDEFLOW_INTEGRATION", "CLAUDEFLOW_VERIFY"},
 	} {
 		raw, err := Read(name, "")
 		if err != nil {
@@ -152,7 +153,7 @@ func TestNoSkillWaitsOnChecks(t *testing.T) {
 // Every skill must say the run has no second turn: it is the instruction whose
 // absence left a finished pull request unmerged.
 func TestEverySkillSaysThereIsNoSecondTurn(t *testing.T) {
-	for _, name := range []Name{Issue, Review, Fix} {
+	for _, name := range []Name{Issue, Review, Fix, Resolve} {
 		raw, err := Read(name, "")
 		if err != nil {
 			t.Fatalf("Read(%s): %v", name, err)

@@ -8,6 +8,13 @@ integration branch when they are green (or, with `merge: human`, leaves it for
 you to review and revises it on your comments), and sends a fresh agent at the
 failure when they are not.
 
+A green pull request that has fallen behind the integration branch is brought
+up to date before it merges. When the integration branch merges in cleanly,
+claudeflow pushes the merge and waits for the new head's checks. When it
+conflicts, claudeflow sends an agent to merge it in, resolve the conflicts and
+push, and then waits for the checks again. Conflicts and red checks share the
+`fixAttempts` budget.
+
 That split is deliberate. Waiting on CI is ten or twenty minutes of an
 environment and a model session spent polling, and it is the step an agent is
 most likely to get wrong — ending its turn with the work finished and unmerged.
@@ -234,8 +241,9 @@ limits:
   # capacity is shared with the operator's own sessions, so a run that retries
   # straight into a limit takes capacity from the person it is working for.
   rateLimitBackoff: 1h
-  # How many times an agent is sent at failing checks before the issue is
-  # blocked and the branch left for a human.
+  # How many times an agent is sent at failing checks, or at a conflict with
+  # the integration branch, before the issue is blocked and the branch left
+  # for a human.
   fixAttempts: 3
 
 slots:

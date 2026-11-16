@@ -218,6 +218,31 @@ func TestLandResyncsAndRewaitsWhenBehind(t *testing.T) {
 	}
 }
 
+// The supervisor has no waiter: it already polls checks once a tick. A clean
+// re-sync is pushed and handed back as ErrResynced, not reported as a failure,
+// and nothing merges until the pushed head has its own green.
+func TestLandWithoutAWaiterReturnsErrResynced(t *testing.T) {
+	w := newWorld(t)
+	run(t, w.checkout, "commit", "--allow-empty", "-m", "someone else landed")
+	run(t, w.checkout, "push", "origin", "preview")
+
+	f := forge.NewFake()
+	f.ChecksBy[7] = greenChecks()
+	res, err := lander(w, f).Land(t.Context(), 7, w.worktree)
+	if !errors.Is(err, ErrResynced) {
+		t.Fatalf("err = %v, want ErrResynced", err)
+	}
+	if !res.Resynced {
+		t.Error("Result.Resynced = false, want true")
+	}
+	if len(f.Merged) != 0 {
+		t.Error("merged a re-synced head before its checks ran")
+	}
+	if local, remote := run(t, w.worktree, "rev-parse", "HEAD"), run(t, w.worktree, "rev-parse", "origin/claude/issue-1"); local != remote {
+		t.Errorf("re-sync not pushed: local %s, origin %s", local, remote)
+	}
+}
+
 func TestLandReportsChecksFailingAfterResync(t *testing.T) {
 	w := newWorld(t)
 	run(t, w.checkout, "commit", "--allow-empty", "-m", "moved on")
