@@ -426,6 +426,47 @@ func (g *GH) PRHeadSHA(ctx context.Context, number int) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+// PRCommits implements Client.
+//
+// The REST endpoint rather than `gh pr view --json commits`, so the paging is
+// explicit. GitHub lists at most 250 commits on a pull request.
+func (g *GH) PRCommits(ctx context.Context, number int) ([]string, error) {
+	raw, err := g.run(ctx, "api", "--paginate",
+		fmt.Sprintf("repos/%s/pulls/%d/commits?per_page=100", g.Repo, number), "--jq", ".[].sha")
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(raw)), nil
+}
+
+// MergedInto implements Client.
+func (g *GH) MergedInto(ctx context.Context, base string, limit int) ([]MergedPR, error) {
+	raw, err := g.run(ctx, "pr", "list", "--repo", g.Repo, "--state", "merged",
+		"--base", base, "--limit", strconv.Itoa(limit), "--json", "number,body,mergeCommit")
+	if err != nil {
+		return nil, err
+	}
+	var prs []struct {
+		Number      int    `json:"number"`
+		Body        string `json:"body"`
+		MergeCommit *struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+	}
+	if err := json.Unmarshal(raw, &prs); err != nil {
+		return nil, fmt.Errorf("decode merged pull requests: %w", err)
+	}
+	out := make([]MergedPR, 0, len(prs))
+	for _, p := range prs {
+		m := MergedPR{Number: p.Number, Body: p.Body}
+		if p.MergeCommit != nil {
+			m.MergeCommit = p.MergeCommit.OID
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
 // BehindBy implements Client.
 //
 // The compare endpoint has no gh subcommand, so this is the raw API. It counts
