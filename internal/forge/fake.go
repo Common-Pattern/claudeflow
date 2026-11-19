@@ -38,6 +38,11 @@ type Fake struct {
 	// AddIssue registered or EditLabels added.
 	Applied map[int][]string
 
+	// Commits holds each pull request's commits, for PRCommits.
+	Commits map[int][]string
+	// MergedPRs holds merged pull requests by base branch, newest first.
+	MergedPRs map[string][]MergedPR
+
 	// Merged records pull requests merged, in order.
 	Merged []int
 	// MergeErr, when set, fails every Merge.
@@ -53,7 +58,7 @@ func NewFake() *Fake {
 		LastSpoke: map[string]time.Time{}, Said: map[string][]Comment{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
 		PRByBranch: map[string]int{}, States: map[int]PRState{}, Behind: map[string]int{},
-		Applied: map[int][]string{},
+		Applied: map[int][]string{}, Commits: map[int][]string{}, MergedPRs: map[string][]MergedPR{},
 	}
 }
 
@@ -249,6 +254,30 @@ func (f *Fake) Checks(_ context.Context, number int) ([]Check, error) {
 		return nil, f.Err
 	}
 	return f.ChecksBy[number], nil
+}
+
+// PRCommits implements Client.
+func (f *Fake) PRCommits(_ context.Context, number int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	return f.Commits[number], nil
+}
+
+// MergedInto implements Client.
+func (f *Fake) MergedInto(_ context.Context, base string, limit int) ([]MergedPR, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	prs := f.MergedPRs[base]
+	if len(prs) > limit {
+		prs = prs[:limit]
+	}
+	return prs, nil
 }
 
 // PRHeadSHA implements Client.

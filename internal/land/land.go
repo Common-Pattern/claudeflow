@@ -303,6 +303,58 @@ func short(sha string) string {
 	return sha
 }
 
+// mergedLookback is how many of the integration branch's merged pull requests
+// ReconcileStanding reads. Anything older has almost always shipped to the base
+// branch already, and checking it costs a larger response on every tick.
+const mergedLookback = 100
+
+// ReconcileStanding rebuilds the standing pull request's closing block from
+// what is actually on the integration branch: every pull request merged into
+// it whose merge commit the standing pull request still carries, which is to
+// say has not reached the base branch yet.
+//
+// Landing adds to the block too, but only ever on top of what the body already
+// says. A body rewritten by hand, by a tool, or by an edit that raced a landing
+// loses its references, and the next landing builds on the gap: work ships and
+// its issues stay open, with nothing to show they were dropped. Deriving the
+// block from the merged pull requests on every tick puts them back.
+//
+// It only adds. A reference someone put there by hand is theirs to remove.
+func (l Lander) ReconcileStanding(ctx context.Context) error {
+	if l.Cfg.Branches.SingleBranch() {
+		return nil
+	}
+	pr, err := l.Client.StandingPR(ctx, l.Cfg.Branches.Base, l.Cfg.Branches.Integration)
+	if errors.Is(err, forge.ErrNoStandingPR) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	commits, err := l.Client.PRCommits(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("read commits on #%d: %w", pr, err)
+	}
+	pending := make(map[string]struct{}, len(commits))
+	for _, c := range commits {
+		pending[c] = struct{}{}
+	}
+	merged, err := l.Client.MergedInto(ctx, l.Cfg.Branches.Integration, mergedLookback)
+	if err != nil {
+		return fmt.Errorf("list pull requests merged into %s: %w", l.Cfg.Branches.Integration, err)
+	}
+	var refs []int
+	for _, m := range merged {
+		if _, ok := pending[m.MergeCommit]; ok {
+			refs = append(refs, forge.ClosingRefs(m.Body)...)
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return l.addClosingRefs(ctx, pr, refs)
+}
+
 // addClosingRefs merges refs into the standing pull request's closing block.
 //
 // Read-modify-write rather than append: several landings accumulate onto one

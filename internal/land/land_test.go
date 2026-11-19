@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -540,4 +541,64 @@ func TestAfterMergeReportsNoStandingPRForSingleBranchProjects(t *testing.T) {
 	if res.StandingPR != 0 {
 		t.Errorf("StandingPR = %d, want 0", res.StandingPR)
 	}
+}
+
+// The standing pull request on slotbooks lost its closing block to an edit
+// between two landings, and the next landing built on the gap: #344's work was
+// on the integration branch and nothing would ever have closed it.
+func TestReconcileStandingRestoresDroppedClosingRefs(t *testing.T) {
+	f := forge.NewFake()
+	f.Standing = []int{361}
+	f.Bodies[361] = "preview → main\n\n" + forge.ClosesMarker + "\nFixes #345\n"
+	f.Commits[361] = []string{"c363", "work", "c366"}
+	f.MergedPRs["preview"] = []forge.MergedPR{
+		{Number: 366, Body: "Closes #345", MergeCommit: "c366"},
+		{Number: 363, Body: "## Summary\n\nCloses #344", MergeCommit: "c363"},
+		// Already on main: its issue was closed when main took it.
+		{Number: 300, Body: "Closes #10", MergeCommit: "c300"},
+	}
+
+	if err := (Lander{Cfg: cfg(), Client: f}).ReconcileStanding(t.Context()); err != nil {
+		t.Fatalf("ReconcileStanding: %v", err)
+	}
+	if got := forge.ClosingRefs(f.Bodies[361]); !slices.Equal(got, []int{344, 345}) {
+		t.Errorf("standing refs = %v, want [344 345]", got)
+	}
+	if !strings.HasPrefix(f.Bodies[361], "preview → main") {
+		t.Error("the rest of the standing body was lost")
+	}
+}
+
+func TestReconcileStandingKeepsReferencesAddedByHand(t *testing.T) {
+	f := forge.NewFake()
+	f.Standing = []int{361}
+	body := "preview → main\n\n" + forge.ClosesMarker + "\nFixes #344\nFixes #999\n"
+	f.Bodies[361] = body
+	f.Commits[361] = []string{"c363"}
+	f.MergedPRs["preview"] = []forge.MergedPR{{Number: 363, Body: "Closes #344", MergeCommit: "c363"}}
+
+	if err := (Lander{Cfg: cfg(), Client: f}).ReconcileStanding(t.Context()); err != nil {
+		t.Fatalf("ReconcileStanding: %v", err)
+	}
+	if f.Bodies[361] != body {
+		t.Errorf("standing body = %q, want it untouched", f.Bodies[361])
+	}
+}
+
+func TestReconcileStandingWithNothingToReconcile(t *testing.T) {
+	t.Run("no standing pull request", func(t *testing.T) {
+		f := forge.NewFake()
+		if err := (Lander{Cfg: cfg(), Client: f}).ReconcileStanding(t.Context()); err != nil {
+			t.Errorf("ReconcileStanding: %v", err)
+		}
+	})
+	t.Run("single branch", func(t *testing.T) {
+		f := forge.NewFake()
+		f.Err = errors.New("the forge must not be asked")
+		c := cfg()
+		c.Branches.Integration = c.Branches.Base
+		if err := (Lander{Cfg: c, Client: f}).ReconcileStanding(t.Context()); err != nil {
+			t.Errorf("ReconcileStanding: %v", err)
+		}
+	})
 }

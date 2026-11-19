@@ -176,6 +176,14 @@ func WithClosingRefs(body string, refs []int) string {
 	return strings.TrimRight(body, "\n") + "\n\n" + block + "\n"
 }
 
+// MergedPR is a pull request that has been merged.
+type MergedPR struct {
+	Number int
+	Body   string
+	// MergeCommit is the commit the merge put on the base branch.
+	MergeCommit string
+}
+
 // Comment is one instruction from the operator.
 type Comment struct {
 	At time.Time
@@ -236,6 +244,13 @@ type Client interface {
 	Checks(ctx context.Context, number int) ([]Check, error)
 	// PRHeadSHA returns the commit a pull request currently points at.
 	PRHeadSHA(ctx context.Context, number int) (string, error)
+	// PRCommits returns the commits a pull request carries: on the standing
+	// pull request, everything on the integration branch that the base branch
+	// does not have yet.
+	PRCommits(ctx context.Context, number int) ([]string, error)
+	// MergedInto returns up to limit of the pull requests most recently merged
+	// into base.
+	MergedInto(ctx context.Context, base string, limit int) ([]MergedPR, error)
 	// BehindBy reports how many commits base has that head does not: how far
 	// the base branch has moved past the point head was branched from, or last
 	// brought up to date at.

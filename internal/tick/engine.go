@@ -13,6 +13,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/config"
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
+	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
 	"github.com/Common-Pattern/claudeflow/internal/slot"
 	"github.com/Common-Pattern/claudeflow/internal/state"
@@ -89,6 +90,12 @@ func (e Engine) Once(ctx context.Context) error {
 	// landed run frees nothing until it is resolved.
 	if err := e.advanceAwaitingCI(ctx); err != nil {
 		e.logf("advancing checks: %v", err)
+	}
+	// Not gated on dispatch: it only edits the standing pull request, and an
+	// issue left off it stays open after its work ships.
+	l := land.Lander{Cfg: e.Cfg, Client: e.Client, Repo: e.Repo, Log: e.Log}
+	if err := l.ReconcileStanding(ctx); err != nil {
+		e.logf("standing pull request closing references: %v", err)
 	}
 	blocked := DispatchBlocked(e.Store, e.now())
 	// Revisions go before new issues for the same reason review runs do: the
