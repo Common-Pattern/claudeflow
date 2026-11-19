@@ -323,6 +323,32 @@ func TestReapRestoresLandedAcrossAnInterveningQuestion(t *testing.T) {
 	}
 }
 
+// An issue blocked since landing, by a run that opened no pull request, is
+// still landed: blocked work that is really unsettled keeps a pull request
+// open, and reap settles that before it gets here. Issue #344 on slotbooks was
+// blocked twice this way by a binary that read an answer-only run as a crash,
+// and every later answer-only run then blocked it again.
+func TestReapRestoresLandedOverABlockWithNoPullRequest(t *testing.T) {
+	e, f := newEngine(t)
+	l := e.Cfg.Labels
+	f.AddIssue(42, time.Now(), l.Queued, l.Landed)
+	requeued(t, e, f)
+	if err := f.EditLabels(t.Context(), 42, []string{l.Blocked}, []string{l.Working}); err != nil {
+		t.Fatal(err)
+	}
+	requeued(t, e, f)
+
+	reapDeadRun(t, e, cleanEnd)
+
+	labels, _ := f.Labels(t.Context(), 42)
+	if !slices.Contains(labels, l.Landed) || slices.Contains(labels, l.Blocked) {
+		t.Errorf("labels = %v, want landed restored", labels)
+	}
+	if c := f.Comments[42]; len(c) != 1 || strings.Contains(c[0], "without finishing") {
+		t.Errorf("comments = %q, want one note that landed was restored", c)
+	}
+}
+
 func TestReapBlocksANoPRRunWhenTheIssueWasNotLanded(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -330,7 +356,7 @@ func TestReapBlocksANoPRRunWhenTheIssueWasNotLanded(t *testing.T) {
 		transcript string
 	}{
 		{"never landed", nil, cleanEnd},
-		{"blocked since landing", []string{"landed", "blocked"}, cleanEnd},
+		{"waiting on review since landing", []string{"landed", "review"}, cleanEnd},
 		{"landed, but the run did not end cleanly", []string{"landed"}, `{"type":"assistant"}` + "\n"},
 		{"landed, but the run ended in an error",
 			[]string{"landed"}, `{"type":"result","subtype":"error_during_execution","is_error":true}` + "\n"},
@@ -338,7 +364,7 @@ func TestReapBlocksANoPRRunWhenTheIssueWasNotLanded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e, f := newEngine(t)
 			l := e.Cfg.Labels
-			names := map[string]string{"landed": l.Landed, "blocked": l.Blocked}
+			names := map[string]string{"landed": l.Landed, "review": l.Review}
 			f.AddIssue(42, time.Now(), l.Queued)
 			for _, h := range tc.history {
 				if err := f.EditLabels(t.Context(), 42, []string{names[h]}, nil); err != nil {
