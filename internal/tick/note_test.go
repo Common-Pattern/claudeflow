@@ -1,6 +1,9 @@
 package tick
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -44,5 +47,34 @@ func TestNoPromptNoteLeavesTheSkillAlone(t *testing.T) {
 		if e.systemPrompt(state.KindReview, instructions) != string(instructions) {
 			t.Errorf("note %q changed the prompt", note)
 		}
+	}
+}
+
+// The agent CLI's stream echoes neither prompt, so the log has them only if
+// claudeflow writes them there.
+func TestTheLogStartsWithWhatTheAgentWasGiven(t *testing.T) {
+	e, _ := newEngine(t)
+	args, err := e.agentArgs(Start{Kind: state.KindBuild, Ref: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "logs", "build-7.log")
+	e.logPrompt("build-7", logPath, args)
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec struct {
+		Type         string `json:"type"`
+		Prompt       string `json:"prompt"`
+		SystemPrompt string `json:"system_prompt"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("log is not one JSON line: %v\n%s", err, raw)
+	}
+	if rec.Type != "claudeflow_prompt" || !strings.Contains(rec.Prompt, "GitHub issue #7") ||
+		rec.SystemPrompt != args[slices.Index(args, "--append-system-prompt")+1] {
+		t.Errorf("log does not hold the prompts: %+v", rec)
 	}
 }

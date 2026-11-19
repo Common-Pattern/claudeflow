@@ -381,6 +381,7 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 	// every fix look like a recycled pid, and the next tick reaped it and took
 	// its stack down while the agent was still working.
 	r.Started = e.now()
+	e.logPrompt(r.ID(), logPath, args)
 	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
 		Command: e.Cfg.Agent.Command,
 		Args:    args,

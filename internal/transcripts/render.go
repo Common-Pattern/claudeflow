@@ -43,6 +43,10 @@ type record struct {
 	RateLimitInfo struct {
 		Status string `json:"status"`
 	} `json:"rate_limit_info"`
+	// Prompt and SystemPrompt are set on the line claudeflow writes itself;
+	// see WritePrompt.
+	Prompt       string `json:"prompt"`
+	SystemPrompt string `json:"system_prompt"`
 }
 
 // block is one piece of a message: text, thinking, a tool call or its result.
@@ -138,6 +142,15 @@ func events(rec record) []event {
 		}
 	case "result":
 		return []event{closing(rec)}
+	case promptType:
+		var evs []event
+		if rec.SystemPrompt != "" {
+			evs = append(evs, event{Class: "prompt", Label: "System prompt", Summary: clip(rec.SystemPrompt), Body: bounded(rec.SystemPrompt)})
+		}
+		if rec.Prompt != "" {
+			evs = append(evs, event{Class: "prompt", Label: "Prompt", Summary: clip(rec.Prompt), Body: bounded(rec.Prompt)})
+		}
+		return evs
 	}
 	return nil
 }
