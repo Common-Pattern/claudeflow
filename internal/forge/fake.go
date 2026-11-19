@@ -34,6 +34,9 @@ type Fake struct {
 	States map[int]PRState
 	// Behind holds how far the base is ahead of a head commit. Absent means 0.
 	Behind map[string]int
+	// Applied is each issue's label history, oldest first: every label
+	// AddIssue registered or EditLabels added.
+	Applied map[int][]string
 
 	// Merged records pull requests merged, in order.
 	Merged []int
@@ -50,6 +53,7 @@ func NewFake() *Fake {
 		LastSpoke: map[string]time.Time{}, Said: map[string][]Comment{}, ChecksBy: map[int][]Check{},
 		HeadSHA: map[int]string{}, Created: map[string]string{}, Bodies: map[int]string{},
 		PRByBranch: map[string]int{}, States: map[int]PRState{}, Behind: map[string]int{},
+		Applied: map[int][]string{},
 	}
 }
 
@@ -59,6 +63,7 @@ func (f *Fake) AddIssue(number int, created time.Time, labels ...string) *Issue 
 	defer f.mu.Unlock()
 	i := &Issue{Number: number, Title: fmt.Sprintf("issue %d", number), Labels: labels, CreatedAt: created}
 	f.Issues[number] = i
+	f.Applied[number] = append(f.Applied[number], labels...)
 	return i
 }
 
@@ -144,9 +149,20 @@ func (f *Fake) EditLabels(_ context.Context, number int, add, remove []string) e
 	for _, a := range add {
 		if !i.HasLabel(a) {
 			i.Labels = append(i.Labels, a)
+			f.Applied[number] = append(f.Applied[number], a)
 		}
 	}
 	return nil
+}
+
+// LastApplied implements Client.
+func (f *Fake) LastApplied(_ context.Context, number int, names []string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return "", f.Err
+	}
+	return lastOf(f.Applied[number], names), nil
 }
 
 // Comment implements Client.

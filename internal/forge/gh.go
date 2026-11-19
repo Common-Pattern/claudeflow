@@ -528,6 +528,34 @@ func (g *GH) UpdatePRBody(ctx context.Context, number int, body string) error {
 	return nil
 }
 
+// LastApplied implements Client.
+//
+// The issue's event stream is chronological, so the last matching "labeled"
+// event is the answer. --jq runs once per page, and each page prints one name
+// per line, so the concatenated output is still in order.
+func (g *GH) LastApplied(ctx context.Context, number int, names []string) (string, error) {
+	raw, err := g.run(ctx, "api", "--paginate",
+		fmt.Sprintf("repos/%s/issues/%d/events", g.Repo, number),
+		"--jq", `.[] | select(.event == "labeled") | .label.name`)
+	if err != nil {
+		return "", err
+	}
+	return lastOf(strings.Split(string(raw), "\n"), names), nil
+}
+
+// lastOf returns the last entry of applied that is one of names.
+func lastOf(applied, names []string) string {
+	for i := len(applied) - 1; i >= 0; i-- {
+		name := strings.TrimSpace(applied[i])
+		for _, n := range names {
+			if name == n {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 // PRForBranch implements Client.
 func (g *GH) PRForBranch(ctx context.Context, branch string) (int, error) {
 	raw, err := g.run(ctx, "pr", "list", "--repo", g.Repo, "--state", "open",

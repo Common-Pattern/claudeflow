@@ -204,6 +204,12 @@ type Client interface {
 	// EditLabels adds and removes labels in one call. Removing a label the
 	// issue does not carry must not fail the call.
 	EditLabels(ctx context.Context, number int, add, remove []string) error
+	// LastApplied returns whichever of names was most recently added to the
+	// issue, whether or not it is still there, or "" when none ever was.
+	//
+	// Labels are claudeflow's whole state, and re-queueing an issue strips
+	// its outcome. This is how a later run learns what that outcome was.
+	LastApplied(ctx context.Context, number int, names []string) (string, error)
 	// Comment posts a comment on an issue or pull request.
 	Comment(ctx context.Context, number int, body string) error
 	// LatestCommentBy returns when user last gave an instruction on a thread,

@@ -351,12 +351,55 @@ func (e Engine) resolveAbandoned(ctx context.Context, r state.Run) error {
 		return e.Client.EditLabels(ctx, r.Ref, nil, []string{e.Cfg.Labels.Working})
 	}
 
+	if e.stillLanded(ctx, r) {
+		e.logf("%s: ended with no pull request; the issue's work is already landed, so restoring %s",
+			r.ID(), e.Cfg.Labels.Landed)
+		body := fmt.Sprintf("This run opened no pull request, and the work already landed is unchanged, "+
+			"so this issue is back to `%s`.\n\n- Transcript: %s",
+			e.Cfg.Labels.Landed, e.transcript(r.Log))
+		if err := e.Client.Comment(ctx, r.Ref, body); err != nil {
+			e.logf("%s: could not comment: %v", r.ID(), err)
+		}
+		return e.Client.EditLabels(ctx, r.Ref, []string{e.Cfg.Labels.Landed}, []string{e.Cfg.Labels.Working})
+	}
+
 	body := fmt.Sprintf("The unattended run exited without finishing.\n\n- Transcript: %s\n\nComment here, or re-apply `%s`, to try again.",
 		e.transcript(r.Log), e.Cfg.Labels.Queued)
 	if err := e.Client.Comment(ctx, r.Ref, body); err != nil {
 		e.logf("%s: could not comment: %v", r.ID(), err)
 	}
 	return e.Client.EditLabels(ctx, r.Ref, []string{e.Cfg.Labels.Blocked}, []string{e.Cfg.Labels.Working})
+}
+
+// stillLanded reports whether a run that opened no pull request left an issue
+// whose work had already landed, and did so by finishing rather than dying.
+//
+// A comment on a landed issue re-queues it, and that strips the landed label.
+// Not every such comment asks for code: "file issues for what is left" or "why
+// did you do it this way" is answered on the thread, and a run that answers
+// and stops has done exactly what it was asked. Without this it read as a
+// crash and the issue went to blocked, though nothing had broken and the
+// landed work was untouched.
+//
+// "Already landed" means landed was the issue's last outcome. Question is
+// skipped over: it pauses work rather than settling it, so landed, then a
+// question, then a reply that needs no code is still landed. Blocked or review
+// after it means later work is unsettled, and that is not restored over.
+func (e Engine) stillLanded(ctx context.Context, r state.Run) bool {
+	if r.Log == "" {
+		return false
+	}
+	raw, err := os.ReadFile(r.Log)
+	if err != nil || !runner.EndedCleanly(string(raw)) {
+		return false
+	}
+	l := e.Cfg.Labels
+	last, err := e.Client.LastApplied(ctx, r.Ref, []string{l.Landed, l.Blocked, l.Review})
+	if err != nil {
+		e.logf("%s: could not read the issue's label history: %v", r.ID(), err)
+		return false
+	}
+	return last == l.Landed
 }
 
 func (e Engine) hitUsageLimit(r state.Run) bool {

@@ -140,6 +140,18 @@ revised plan and ask again — approval is for the plan you posted, not for the
 idea of a migration. Discovering the need for one mid-implementation does not
 exempt it; go back to this step.
 
+## 3b. When the thread asks for no code
+
+Not every run is for a change. A comment on work that already landed may ask
+you to file issues for what is left, or to explain a decision. Do what it asks,
+reply on the issue, and stop. Open no pull request and leave the labels alone.
+When the issue's work had already landed, claudeflow puts the landed label back.
+
+If the work has *not* landed and you conclude nothing needs changing, that is a
+judgement the user should confirm. Say why, with `file:line`, and ask as in
+step 3. A run that ends with no pull request and no question on unlanded work
+is reported as one that did not finish.
+
 ## 4. Implement
 
 Under the project's own rules, which are not optional here because nobody is

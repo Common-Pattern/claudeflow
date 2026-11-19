@@ -1,6 +1,7 @@
 package tick
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -245,5 +246,116 @@ func TestExpandAgentEnvUnknownPlaceholder(t *testing.T) {
 func TestExpandAgentEnvEmpty(t *testing.T) {
 	if got := expandAgentEnv(nil, map[string]string{"A": "1"}); len(got) != 0 {
 		t.Errorf("= %v, want empty", got)
+	}
+}
+
+// reapDeadRun records a build run on issue 42 whose process has exited with
+// transcript as its log, and reaps it.
+func reapDeadRun(t *testing.T, e Engine, transcript string) {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "build-42.log")
+	if err := os.WriteFile(log, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	if err := e.Store.SaveRun(state.Run{
+		Kind: state.KindBuild, Ref: 42, Slot: 1, PID: deadPID(t), Started: time.Now(), Log: log,
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := e.Reap(t.Context()); err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+}
+
+const cleanEnd = `{"type":"result","subtype":"success","is_error":false,"result":"filed #371"}` + "\n"
+
+// requeued simulates a comment re-queueing an issue that had an outcome, and
+// a run claiming it: the outcome labels come off and working goes on.
+func requeued(t *testing.T, e Engine, f *forge.Fake) {
+	t.Helper()
+	l := e.Cfg.Labels
+	if err := f.EditLabels(t.Context(), 42, []string{l.Working}, l.Resolution()); err != nil {
+		t.Fatalf("EditLabels: %v", err)
+	}
+}
+
+// A comment on a landed issue that asks for no code — "file issues for what is
+// left" — re-queues it, and the run answers on the thread and stops with no
+// pull request. That is the run doing what it was asked, not a crash, and the
+// landed work is untouched: the issue goes back to landed, not blocked.
+func TestReapRestoresLandedWhenACleanRunOnALandedIssueOpensNoPR(t *testing.T) {
+	e, f := newEngine(t)
+	l := e.Cfg.Labels
+	f.AddIssue(42, time.Now(), l.Queued, l.Landed)
+	requeued(t, e, f)
+
+	reapDeadRun(t, e, cleanEnd)
+
+	labels, _ := f.Labels(t.Context(), 42)
+	if !slices.Contains(labels, l.Landed) || slices.Contains(labels, l.Blocked) || slices.Contains(labels, l.Working) {
+		t.Errorf("labels = %v, want landed restored and nothing else resolved", labels)
+	}
+	if l.IsQueued(labels) {
+		t.Errorf("labels = %v, want it not re-dispatched", labels)
+	}
+	if c := f.Comments[42]; len(c) != 1 || strings.Contains(c[0], "without finishing") {
+		t.Errorf("comments = %q, want one note that landed was restored", c)
+	}
+}
+
+// A question between landing and this run pauses work rather than settling
+// it: the last real outcome is still landed.
+func TestReapRestoresLandedAcrossAnInterveningQuestion(t *testing.T) {
+	e, f := newEngine(t)
+	l := e.Cfg.Labels
+	f.AddIssue(42, time.Now(), l.Queued, l.Landed)
+	requeued(t, e, f)
+	if err := f.EditLabels(t.Context(), 42, []string{l.Question}, []string{l.Working}); err != nil {
+		t.Fatal(err)
+	}
+	requeued(t, e, f)
+
+	reapDeadRun(t, e, cleanEnd)
+
+	labels, _ := f.Labels(t.Context(), 42)
+	if !slices.Contains(labels, l.Landed) {
+		t.Errorf("labels = %v, want landed restored", labels)
+	}
+}
+
+func TestReapBlocksANoPRRunWhenTheIssueWasNotLanded(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		history    []string // outcomes the issue carried before this run, in order
+		transcript string
+	}{
+		{"never landed", nil, cleanEnd},
+		{"blocked since landing", []string{"landed", "blocked"}, cleanEnd},
+		{"landed, but the run did not end cleanly", []string{"landed"}, `{"type":"assistant"}` + "\n"},
+		{"landed, but the run ended in an error",
+			[]string{"landed"}, `{"type":"result","subtype":"error_during_execution","is_error":true}` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, f := newEngine(t)
+			l := e.Cfg.Labels
+			names := map[string]string{"landed": l.Landed, "blocked": l.Blocked}
+			f.AddIssue(42, time.Now(), l.Queued)
+			for _, h := range tc.history {
+				if err := f.EditLabels(t.Context(), 42, []string{names[h]}, nil); err != nil {
+					t.Fatal(err)
+				}
+				requeued(t, e, f)
+			}
+			if len(tc.history) == 0 {
+				requeued(t, e, f)
+			}
+
+			reapDeadRun(t, e, tc.transcript)
+
+			labels, _ := f.Labels(t.Context(), 42)
+			if !slices.Contains(labels, l.Blocked) || slices.Contains(labels, l.Landed) {
+				t.Errorf("labels = %v, want blocked", labels)
+			}
+		})
 	}
 }
