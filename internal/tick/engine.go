@@ -384,8 +384,17 @@ func (e Engine) resolveAbandoned(ctx context.Context, r state.Run) error {
 //
 // "Already landed" means landed was the issue's last outcome. Question is
 // skipped over: it pauses work rather than settling it, so landed, then a
-// question, then a reply that needs no code is still landed. Blocked or review
-// after it means later work is unsettled, and that is not restored over.
+// question, then a reply that needs no code is still landed. Review after it
+// means a pull request is waiting on a person, and that is not restored over.
+//
+// Blocked is skipped over too. This is only reached when the run's branch has
+// no open pull request, and blocked work that is really unsettled — failing
+// checks, a conflict — keeps its pull request open, so reap never gets here
+// for it. A blocked with no pull request behind it came from a run that died,
+// never started, or was misread as a crash by a binary without this check;
+// none of those touched the landed work. Counting it left an issue that had
+// once been wrongly blocked blocked again by every later run that answered on
+// the thread, each with a comment saying it had not finished.
 func (e Engine) stillLanded(ctx context.Context, r state.Run) bool {
 	if r.Log == "" {
 		return false
@@ -395,7 +404,7 @@ func (e Engine) stillLanded(ctx context.Context, r state.Run) bool {
 		return false
 	}
 	l := e.Cfg.Labels
-	last, err := e.Client.LastApplied(ctx, r.Ref, []string{l.Landed, l.Blocked, l.Review})
+	last, err := e.Client.LastApplied(ctx, r.Ref, []string{l.Landed, l.Review})
 	if err != nil {
 		e.logf("%s: could not read the issue's label history: %v", r.ID(), err)
 		return false
