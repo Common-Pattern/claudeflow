@@ -16,6 +16,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/runner"
 	"github.com/Common-Pattern/claudeflow/internal/slot"
 	"github.com/Common-Pattern/claudeflow/internal/state"
+	"github.com/Common-Pattern/claudeflow/internal/transcripts"
 	"github.com/Common-Pattern/claudeflow/skills"
 )
 
@@ -513,6 +514,7 @@ func (e Engine) start(ctx context.Context, s Start) error {
 	// behind the install hook and a cold stack, and a live run read as a
 	// recycled pid and was reaped under its agent.
 	run.Started = e.now()
+	e.logPrompt(run.ID(), run.Log, args)
 	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
 		Command: e.Cfg.Agent.Command,
 		Args:    args,
@@ -738,6 +740,27 @@ func (e Engine) agentArgs(s Start) ([]string, error) {
 		args = append(args, "--model", e.Cfg.Agent.Model)
 	}
 	return append(args, e.Cfg.Agent.ExtraArgs...), nil
+}
+
+// logPrompt writes what the agent is about to be given at the head of its
+// run's log, so the transcript page can show it. A failure costs only that.
+func (e Engine) logPrompt(id, logPath string, args []string) {
+	if logPath == "" {
+		return
+	}
+	if err := transcripts.WritePrompt(logPath, argValue(args, "-p"), argValue(args, "--append-system-prompt"), e.now()); err != nil {
+		e.logf("%s: could not write the prompt to the log: %v", id, err)
+	}
+}
+
+// argValue is the value that follows flag in args, or "" when it is absent.
+func argValue(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {

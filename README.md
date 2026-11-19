@@ -334,8 +334,9 @@ only actionable to someone already logged in to the host that produced it.
 
 Setting a port makes `serve` publish the log directory read-only over HTTP, and
 the comments carry a link instead. Runs write the agent's event stream to the
-log as they work, so the link opens a page that follows the run live: its
-messages, each tool call and its output, and how it finished. `?raw` is the
+log as they work, so the link opens a page that follows the run live: the
+prompt and system prompt it was given (collapsed, at the top), its messages,
+each tool call and its output, and how it finished. `?raw` is the
 file itself. Nothing is copied anywhere: the file is served where housekeeping already manages it, so
 the retention window is the one you already set. The alternatives all involve copying — a gist is unlisted
 rather than private, and a branch puts run output into the project's history.

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // serverOver returns a server over a directory holding one transcript.
@@ -194,6 +195,26 @@ const stream = `installing dependencies
 {"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"All done."}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"All done.","num_turns":3,"duration_ms":5316,"total_cost_usd":0.25}
 `
+
+func TestRendersThePromptsCollapsed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.log")
+	at := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	if err := WritePrompt(path, "Work issue #7.\nEnd to end.", "# Run <instructions>\nDo it.", at); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	page, _ := render(raw)
+	got := string(page)
+	for _, want := range []string{
+		"<details><summary><b>System prompt</b> # Run &lt;instructions&gt; …</summary><pre># Run &lt;instructions&gt;\nDo it.</pre></details>",
+		"<details><summary><b>Prompt</b> Work issue #7. …</summary><pre>Work issue #7.\nEnd to end.</pre></details>",
+		`datetime="2026-11-19T10:00:00.000Z"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("page lacks %q:\n%s", want, got)
+		}
+	}
+}
 
 func TestRendersARun(t *testing.T) {
 	page, done := render([]byte(stream))
