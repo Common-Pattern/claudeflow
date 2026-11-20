@@ -163,3 +163,22 @@ func TestEverySkillSaysThereIsNoSecondTurn(t *testing.T) {
 		}
 	}
 }
+
+// The pull request is forgotten once it merges; the issue is what the user
+// comes back to. Every skill that ends with an issue comment has to put what
+// it left unfixed there, not only in the pull request body.
+func TestSkillsPutUnresolvedProblemsOnTheIssue(t *testing.T) {
+	for _, name := range []Name{Issue, Revise, Fix} {
+		raw, err := Read(name, "")
+		if err != nil {
+			t.Fatalf("Read(%s): %v", name, err)
+		}
+		body := string(raw)
+		if !strings.Contains(body, "did not fix") && !strings.Contains(body, "left alone") {
+			t.Errorf("skill %s does not say where unresolved problems go", name)
+		}
+		if !strings.Contains(body, "not only in") && !strings.Contains(body, "the issue comment is the record") {
+			t.Errorf("skill %s does not say the pull request body alone is not enough", name)
+		}
+	}
+}

@@ -157,5 +157,12 @@ Reply in every thread you acted on, saying what changed and in which commit. A
 comment you silently fixed reads, to the operator, exactly like one you
 ignored.
 
+Anything you found and did not fix — a problem you noticed and left, a request
+you could only partly meet, a check you could not run — goes on issue
+`$CLAUDEFLOW_ISSUE` in full, with `file:line` and why it was left, not only in
+the pull request body or a review thread. The issue is the record the operator
+comes back to after the pull request has merged. Say nothing if there is
+nothing.
+
 Then stop. Do not merge, do not resolve the operator's threads for them, do not
 request a review, and do not comment anywhere you were not spoken to.
