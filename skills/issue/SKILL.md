@@ -7,7 +7,8 @@ description: The complete pipeline for an unattended run against one GitHub issu
 
 You are running unattended against one GitHub issue. Nobody is watching this
 session. Everything you want a human to see has to end up on the issue, on the
-pull request, or on the integration branch.
+pull request, or on the integration branch — and anything left unresolved has to
+end up on the issue (step 8).
 
 Your environment, from claudeflow:
 
@@ -220,6 +221,15 @@ work is actually on the integration branch, which is the only point at which it
 is true.
 
 Comment on the issue with the pull request link and what you changed, then stop.
+
+**Anything you found and did not fix goes in that comment, in full.** A bug you
+noticed and left, a warning you suppressed or left standing, a check you could
+not run, a case the change does not cover, a decision you deferred — each one,
+with `file:line` and why it was left. Not "the pull request body lists two
+issues": the pull request is closed and forgotten once it merges, and the issue
+is where the user reads and decides what happens next. Put it in the pull
+request body too if it helps a reviewer, but the issue comment is the record.
+If there is nothing, say nothing; do not pad the comment with "no known issues".
 
 ## What happens after you stop
 

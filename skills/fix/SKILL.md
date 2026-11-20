@@ -99,3 +99,6 @@ merges (`CLAUDEFLOW_MERGE=human`), hands it to them for review.
 If you could not fix it, say what you found and what you think is wrong. Being
 told "this is an infrastructure failure, not the diff" is worth more than
 another attempt.
+
+Anything else you noticed and left alone goes in that issue comment too, in
+full, with `file:line` — not only in the pull request body.
