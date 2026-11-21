@@ -164,6 +164,35 @@ func TestEverySkillSaysThereIsNoSecondTurn(t *testing.T) {
 	}
 }
 
+// An issue run must find out where the issue sits in its family: a sub-issue
+// reads its parent for context, and a parent works its sub-issues in turn and
+// closes each one through its pull request. Without this, a parent's run sees
+// only the parent's body, and its sub-issues stay open after the work ships.
+func TestIssueSkillHandlesParentsAndSubIssues(t *testing.T) {
+	raw, err := Read(Issue, "")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	body := string(raw)
+	for _, want := range []string{
+		"--json parent,subIssues",
+		"read the parent for context",
+		"one at a time",
+		"for every sub-issue",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("issue skill does not say %q", want)
+		}
+	}
+	raw, err = Read(Planning, "")
+	if err != nil {
+		t.Fatalf("Read(Planning): %v", err)
+	}
+	if !strings.Contains(string(raw), "--json parent,subIssues") {
+		t.Error("planning skill does not look up the issue's parent and sub-issues")
+	}
+}
+
 // The pull request is forgotten once it merges; the issue is what the user
 // comes back to. Every skill that ends with an issue comment has to put what
 // it left unfixed there, not only in the pull request body.

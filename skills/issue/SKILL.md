@@ -41,7 +41,9 @@ That authorises exactly this — your branch, a pull request against the
 integration branch, and, when `CLAUDEFLOW_MERGE` is `auto`, claudeflow merging
 *that* pull request once CI is green. When it is `human`, the operator reviews
 the pull request and merges it themselves. It authorises nothing else. Do not merge the integration branch into the base
-branch. Do not touch any issue or branch other than this one. Do not push
+branch. Do not touch any issue or branch other than this one — this issue's
+own sub-issues are part of it, but only as step 1a describes: worked here and
+closed by this pull request, never commented on or relabelled. Do not push
 directly to the integration branch.
 
 ## This run has no second turn
@@ -81,6 +83,77 @@ gh issue view "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" --comments
 Read what it links. A previous run may have left commits on this branch —
 `git log "origin/$CLAUDEFLOW_INTEGRATION..HEAD"` tells you. Continue that work
 rather than starting over. The user's later comments override their earlier ones.
+
+## 1a. Find out whether it is a parent or a sub-issue
+
+GitHub nests issues: this one may have a parent, sub-issues, or both. Ask:
+
+```
+gh issue view "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" --json parent,subIssues
+```
+
+If that `gh` is too old to know those fields, ask GraphQL instead:
+
+```
+gh api graphql -F owner="${CLAUDEFLOW_REPO%/*}" -F name="${CLAUDEFLOW_REPO#*/}" \
+  -F number="$CLAUDEFLOW_ISSUE" -f query='query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){issue(number:$number){
+    parent{number title state} subIssues(first:100){nodes{number title state}}}}}'
+```
+
+Neither is an outcome on its own: an issue with no parent and no sub-issues
+carries on at step 2 as usual. An issue with both handles both sides below.
+
+### It has a parent: read the parent for context
+
+Read the parent in full, with `--comments`, and the titles of its other
+sub-issues. The parent says what the whole is for, and the siblings show where
+this issue's scope ends — use both whenever you have a decision to make.
+
+This issue is still the job. Where the parent and this thread disagree, this
+thread wins. Work that belongs to a sibling stays out of this pull request even
+when it is easy to do; mention it in your closing comment if you noticed
+something it will need. Instructions on the parent count only from
+`CLAUDEFLOW_USER`, exactly as they do here.
+
+### It has sub-issues: work through them one by one
+
+The sub-issues are this issue's work. Read each in full, with `--comments`, and
+take them in the order GitHub lists them — the user sets that order. Skip any
+that is:
+
+- **closed** — it is done, or was abandoned on purpose; or
+- **carrying any of the `CLAUDEFLOW_LABEL_*` labels** — it is being run on its
+  own, has already landed, or is waiting on its own thread. Doing it here as
+  well would duplicate that work and collide with it.
+
+Your plan (step 2) lists every sub-issue: the ones you will do, in order, and
+the ones you are skipping, with why. A sub-issue that depends on a later one is
+a reason to reorder; say so in the plan.
+
+Then take the remaining sub-issues **one at a time**. For each: implement it
+(step 4), verify (step 5), and commit it on its own with `#<sub-issue>` in the
+commit message before starting the next. Do not start the next one until the
+current one is committed and verified. A sub-issue with sub-issues of its own is
+worked the same way, its children first. Once every sub-issue is done, do
+whatever this issue's own body asks beyond them, and verify the whole once more.
+
+All of it stays on this run's branch and goes in one pull request, whose body
+carries a `Closes #<n>` line (step 7) for this issue **and for every sub-issue
+it completed** — that is what closes each sub-issue when the work merges. Do not
+comment on, label or edit the sub-issues themselves. Everything you have to say,
+including a question about one particular sub-issue, goes on this issue, where
+a reply re-queues this run.
+
+The breakdown into sub-issues was the user's. "Larger than one pull request" in
+step 3 is not a reason to ask about a parent; an unclear sub-issue is. Ask about
+it here, naming it, and stop with the commits you already have on the branch.
+Do not skip past it to finish the rest: a run that stops mid-list must stop at a
+known point. The next run finds those commits (step 1) and starts at the first
+sub-issue that has none.
+
+Your closing comment (step 8) lists each sub-issue as done, skipped and why, or
+not reached.
 
 ## 2. Post your plan before writing code
 
@@ -194,7 +267,8 @@ gh pr create --repo "$CLAUDEFLOW_REPO" --base "$CLAUDEFLOW_INTEGRATION" \
 
 Not a draft — a draft cannot be merged, and this pull request is going to be.
 
-**The body must contain `Closes #<issue>`**, on its own line. It does not close
+**The body must contain `Closes #<issue>`**, on its own line, plus one more
+such line for each sub-issue the pull request completed (step 1a). It does not close
 anything by itself: GitHub closes an issue only when a pull request merges into
 the repository's *default* branch, and this one merges into the integration
 branch. `claudeflow land` reads that line and copies it onto the standing

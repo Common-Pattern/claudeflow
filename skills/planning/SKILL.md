@@ -58,6 +58,12 @@ close that gap, with the user, before a slot is spent on it.
    some of the way; continue from there rather than restarting. The user's later
    comments override their earlier ones.
 
+   Then its family: `gh issue view "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO"
+   --json parent,subIssues`. A parent is the context this issue was cut from —
+   read it and its other sub-issues so the plan stays inside this one's share of
+   the whole. Sub-issues are this issue's work already broken down — read each,
+   and plan the whole, in their order, rather than only the parent's body.
+
 2. **Go and look.** Find the code the issue is about and say what it currently
    does, specifically, with `file:line`. Most planning disagreements dissolve
    once both sides are looking at the same function.
