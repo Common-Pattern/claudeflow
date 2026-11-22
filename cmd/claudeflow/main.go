@@ -29,6 +29,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/inbox"
 	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
+	"github.com/Common-Pattern/claudeflow/internal/sandbox"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 	"github.com/Common-Pattern/claudeflow/internal/tick"
@@ -61,6 +62,7 @@ Commands:
   labels         create or update the labels in the repository
   version        print version information
   inbox          (run by a run's agent hooks) hand over comments made during it
+  sandbox-run    (run inside a sandbox container) prepare a run and start its agent
 
 Flags:
   -c path        config file (default: claudeflow.yaml, then .claudeflow.yaml)
@@ -95,6 +97,20 @@ func run() error {
 	// CLAUDEFLOW_INBOX.
 	if cmd == "inbox" {
 		return runInbox()
+	}
+
+	// sandbox-run is a sandbox container's command: claudeflow's own binary,
+	// mounted in, preparing the run its spec describes and running the agent.
+	// There is no config file in there; the spec is everything.
+	if cmd == "sandbox-run" {
+		if len(rest) != 1 {
+			return errors.New("sandbox-run needs a spec file")
+		}
+		code, err := sandbox.Inside(context.Background(), rest[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "claudeflow sandbox:", err)
+		}
+		os.Exit(code)
 	}
 
 	// init comes before the config is loaded, for the obvious reason.
@@ -234,13 +250,24 @@ func loadConfig(path string) (config.Config, string, error) {
 }
 
 func engine(cfg config.Config, st *state.Store) tick.Engine {
-	return tick.Engine{
+	e := tick.Engine{
 		Cfg:    cfg,
 		Client: forge.NewGH(cfg.Repo),
 		Store:  st,
 		Repo:   git.New(cfg.Paths.Root),
 		Log:    logf,
 	}
+	if cfg.Sandbox.Containerised() {
+		sb, err := tick.NewContainerSandbox(e)
+		if err != nil {
+			// Falling back to the host would run an agent configured to be
+			// contained with the operator's own access. Refuse instead.
+			fmt.Fprintln(os.Stderr, "claudeflow:", err)
+			os.Exit(1)
+		}
+		e.Sandbox = sb
+	}
+	return e
 }
 
 // stackFor returns the Compose stack for a slot. Each slot is its own Compose

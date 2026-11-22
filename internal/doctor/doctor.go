@@ -157,8 +157,40 @@ func Run(ctx context.Context, o Options) Report {
 	if o.HaveConfig {
 		r = append(r, checkComposeFile(ctx, o), checkStateDir(o), checkCheckout(ctx, o))
 		r = append(r, checkTranscripts(ctx, o))
+		if o.Cfg.Sandbox.Containerised() {
+			r = append(r, checkSandboxImage(ctx, o), checkSandboxCredentials(o))
+		}
 	}
 	return r
+}
+
+// checkSandboxImage reports whether the image every sandboxed run starts from
+// is on this host. Without it every run fails at its first step, one issue at
+// a time, each labelled blocked.
+func checkSandboxImage(ctx context.Context, o Options) Result {
+	image := o.Cfg.Sandbox.Image
+	if _, err := o.run()(ctx, o.Cfg.Sandbox.Bin, "image", "exists", image); err != nil {
+		return Result{"sandbox image", Fail, image + " is not on this host",
+			"build it: podman build -t localhost/claudeflow-sandbox sandbox/, or pull your project's image"}
+	}
+	return Result{"sandbox image", OK, image, ""}
+}
+
+// checkSandboxCredentials warns when nothing would give the agent CLI inside a
+// sandbox a way to authenticate: it has none of the operator's own login, and
+// a run without one fails as soon as it starts.
+func checkSandboxCredentials(o Options) Result {
+	for _, name := range o.Cfg.Sandbox.Env {
+		if os.Getenv(name) != "" {
+			return Result{"sandbox credentials", OK, "passing " + strings.Join(o.Cfg.Sandbox.Env, ", "), ""}
+		}
+	}
+	if len(o.Cfg.Sandbox.Mounts) > 0 {
+		return Result{"sandbox credentials", Warn, "no variable in sandbox.env is set; relying on sandbox.mounts",
+			"make sure a mount carries the agent CLI's credentials"}
+	}
+	return Result{"sandbox credentials", Warn, "nothing passes the agent CLI a credential",
+		"run claude setup-token, export CLAUDE_CODE_OAUTH_TOKEN for claudeflow, and list it in sandbox.env"}
 }
 
 // checkSelf reports claudeflow's own version against its latest release.

@@ -337,6 +337,15 @@ paths:
   # state: /var/lib/claudeflow
   # Defaults to <state>/worktrees
   # worktrees: /var/lib/claudeflow/worktrees
+
+# Where runs happen. "local" (the default) runs every agent on this host with
+# your own access. "container" gives every run a fresh container: its own clone,
+# its own stack on a podman nested inside it, and the agent. See "Running every
+# run in a clean sandbox".
+sandbox:
+  kind: local
+  # image: localhost/claudeflow-sandbox
+  # env: [CLAUDE_CODE_OAUTH_TOKEN]
 ```
 
 ### Serving transcripts
@@ -430,6 +439,50 @@ nothing else is using and hands it to the Compose file.
 Whether a slot is free is answered by asking Compose whether that project has
 containers, so there is nothing to configure — and it sees a stack another
 checkout left running, which claudeflow's own records cannot.
+
+### Running every run in a clean sandbox
+
+With `sandbox.kind: container`, a run happens in a new container instead of a
+worktree on this host. The container clones the run's branch from GitHub, runs
+the install hook, brings the Compose file's stack up on a rootless podman
+*inside* the container, and starts the agent there. When the agent exits the
+container is deleted, along with the checkout, the stack and anything the agent
+did to either. The next run on that slot starts from nothing but what was
+pushed.
+
+What crosses back to the host is the run's transcript, its comment inbox, and
+the branch it pushes. That is also the whole of what the agent can reach on
+this machine: it does not see your home directory, your other checkouts, or
+your credentials beyond the ones handed in.
+
+**Requirements.** Rootless podman, and an image carrying git, podman with a
+compose provider, and the agent CLI. `sandbox/Containerfile` is the reference
+image; build it, then add your project's toolchain in an image of your own
+`FROM` it:
+
+    podman build -t localhost/claudeflow-sandbox sandbox/
+
+**Credentials.** GitHub's token goes in automatically: `GH_TOKEN`, else
+`GITHUB_TOKEN`, else whatever `gh auth token` prints. The agent CLI needs its
+own, named in `sandbox.env` and passed by name so no value appears in a command
+line or a file. For Claude Code, `claude setup-token` makes a long-lived
+`CLAUDE_CODE_OAUTH_TOKEN` for exactly this. Do not mount your interactive
+login's credentials file: a sandbox that refreshes it rotates the refresh token
+out from under your own sessions.
+
+**What changes for a run.**
+
+- Each slot keeps its nested image storage in a volume, so a stack's images
+  are pulled once per slot rather than once per run. Containers, volumes and
+  networks in it are removed before every run.
+- `compose.env` is not passed into the sandbox: it exists to point Compose at
+  the host's engine, and there the engine is the nested one. Service addresses
+  in `CLAUDEFLOW_URL_<SERVICE>` are on `localhost`, inside the sandbox.
+- A run that stops without pushing loses what it did. The skills tell the agent
+  to push before any stop on a branch with no pull request yet, and to write
+  findings on the issue instead where a push would re-run checks.
+- Landing works from a checkout of its own under `paths.worktrees`, reset to
+  the pushed branch each time; no agent runs in it.
 
 ## Commands
 

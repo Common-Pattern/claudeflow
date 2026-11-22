@@ -1,0 +1,35 @@
+# The reference image for claudeflow's container sandbox.
+#
+# A run's sandbox is one container from this image: the project's checkout is
+# cloned inside it, its Compose stack runs inside it on a nested, rootless
+# podman, and the agent runs inside it. Nothing a run does reaches the host
+# except through the few paths claudeflow mounts in (its log, its inbox, and
+# claudeflow's own binary).
+#
+# Projects build their own image FROM this one and add their toolchain:
+#
+#     FROM ghcr.io/common-pattern/claudeflow-sandbox   # or a local build of this file
+#     RUN dnf -y install golang && dnf clean all
+#
+# Build it locally with:
+#
+#     podman build -t localhost/claudeflow-sandbox sandbox/
+FROM quay.io/podman/stable:latest
+
+RUN dnf -y install git gh jq nodejs npm podman-compose && dnf clean all \
+ && npm install -g @anthropic-ai/claude-code \
+ && npm cache clean --force
+
+# A published port below 1024 is refused inside a nested, rootless network
+# namespace: nginx's port 80 fails with "permission denied". Lowering the
+# threshold for the inner containers is the documented way round it, and costs
+# nothing here because the whole namespace belongs to this one run.
+RUN mkdir -p /etc/containers/containers.conf.d \
+ && printf '[containers]\ndefault_sysctls = ["net.ipv4.ip_unprivileged_port_start=0"]\n' \
+      > /etc/containers/containers.conf.d/50-claudeflow.conf
+
+# claudeflow runs the container with --userns=keep-id, which makes the image's
+# podman user (uid 1000) the host user. Rootless podman inside needs the subuid
+# ranges the base image already gives that user.
+USER podman
+WORKDIR /home/podman

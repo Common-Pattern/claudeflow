@@ -91,7 +91,15 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 		Cfg: e.Cfg, Client: e.Client, Repo: e.Repo, Log: e.Log,
 		Required: e.Cfg.RequiredChecks,
 	}
-	res, err := l.Land(ctx, r.PR, r.Worktree)
+	worktree := r.Worktree
+	if worktree == "" {
+		// A sandboxed run's checkout was inside its container, which is gone.
+		if worktree, err = e.landingWorktree(ctx, r); err != nil {
+			e.logf("%s: could not prepare a checkout to land #%d from: %v", r.ID(), r.PR, err)
+			return err
+		}
+	}
+	res, err := l.Land(ctx, r.PR, worktree)
 	switch {
 	case errors.Is(err, land.ErrResynced):
 		// The merge of the integration branch is pushed. Its head has no

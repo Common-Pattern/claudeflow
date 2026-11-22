@@ -492,3 +492,26 @@ func TestUnfilledScaffoldWarns(t *testing.T) {
 		t.Errorf("detail = %q, want it to name what is left to fill in", r.Detail)
 	}
 }
+
+func TestContainerSandboxChecks(t *testing.T) {
+	f, cfg := healthy(t)
+	cfg.Sandbox = config.Sandbox{Kind: config.SandboxContainer, Bin: "podman", Image: "localhost/sb", Env: []string{"CF_DOCTOR_TOKEN"}}
+	t.Setenv("CF_DOCTOR_TOKEN", "x")
+	rep := Run(t.Context(), f.options(cfg, true))
+	if r := find(rep, "sandbox image"); r.Status != OK {
+		t.Errorf("sandbox image = %+v, want OK", r)
+	}
+	if r := find(rep, "sandbox credentials"); r.Status != OK {
+		t.Errorf("sandbox credentials = %+v, want OK", r)
+	}
+
+	f.fails["podman image exists"] = true
+	t.Setenv("CF_DOCTOR_TOKEN", "")
+	rep = Run(t.Context(), f.options(cfg, true))
+	if r := find(rep, "sandbox image"); r.Status != Fail {
+		t.Errorf("sandbox image = %+v, want Fail when the image is missing", r)
+	}
+	if r := find(rep, "sandbox credentials"); r.Status != Warn {
+		t.Errorf("sandbox credentials = %+v, want Warn with nothing set", r)
+	}
+}
