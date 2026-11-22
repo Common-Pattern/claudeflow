@@ -155,6 +155,20 @@ the repository and thinks in the issue: its comments are the only artefact of
 the run. Planning runs hold no environment slot and are budgeted separately
 from builds, so a conversation does not queue behind a two-hour build.
 
+### A blocked-by link holds the issue
+
+claudeflow will not start a build on a queued issue that GitHub records as
+*blocked by* another issue whose work is unfinished. A blocker counts as
+finished once it is closed, or once it carries `claude:landed`. Its work is then
+on the integration branch, and that is the branch the next run starts from. A
+blocker in another repository counts as finished only once it is closed. The
+issue keeps `claude` and starts on the first tick after its last blocker is
+done; `claudeflow status` shows what each queued issue is waiting on.
+Planning runs are not held.
+
+Dependencies are yours to record. An agent that finds an unrecorded
+prerequisite asks about it on the issue rather than adding one.
+
 ### A comment re-queues the issue
 
 **A comment from the configured user on an issue in any state re-queues it.**

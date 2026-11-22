@@ -407,10 +407,25 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 			fmt.Println("  (none)")
 		}
 		for _, i := range issues {
-			fmt.Printf("  #%d %s\n", i.Number, i.Title)
+			fmt.Printf("  #%d %s%s\n", i.Number, i.Title, openBlockers(i))
 		}
 	}
 	return nil
+}
+
+// openBlockers names the open issues recorded as blocking i. A queued issue
+// with any that have not landed either is held, not started.
+func openBlockers(i forge.Issue) string {
+	var open []string
+	for _, b := range i.BlockedBy {
+		if b.Open {
+			open = append(open, fmt.Sprintf("#%d", b.Number))
+		}
+	}
+	if len(open) == 0 {
+		return ""
+	}
+	return " (blocked by " + strings.Join(open, ", ") + ")"
 }
 
 func stopAll(st *state.Store) error {

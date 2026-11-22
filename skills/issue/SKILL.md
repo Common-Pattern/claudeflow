@@ -125,11 +125,15 @@ that is:
 - **closed** — it is done, or was abandoned on purpose; or
 - **carrying any of the `CLAUDEFLOW_LABEL_*` labels** — it is being run on its
   own, has already landed, or is waiting on its own thread. Doing it here as
-  well would duplicate that work and collide with it.
+  well would duplicate that work and collide with it; or
+- **recorded as blocked by an issue outside this one** that is neither closed
+  nor landed. claudeflow would hold it, so you hold it too. Hold any later
+  sub-issue that needs it as well. Report each one as waiting, and say what on.
 
 Your plan (step 2) lists every sub-issue: the ones you will do, in order, and
-the ones you are skipping, with why. A sub-issue that depends on a later one is
-a reason to reorder; say so in the plan.
+the ones you are skipping, with why. A sub-issue that depends on a later one —
+recorded as blocked by it, or plainly needing its work — is a reason to
+reorder; say so in the plan.
 
 Then take the remaining sub-issues **one at a time**. For each: implement it
 (step 4), verify (step 5), and commit it on its own with `#<sub-issue>` in the
@@ -154,6 +158,24 @@ sub-issue that has none.
 
 Your closing comment (step 8) lists each sub-issue as done, skipped and why, or
 not reached.
+
+## 1b. Prerequisites are recorded, not decided
+
+claudeflow does not start an issue that GitHub records as blocked by unfinished
+work. A blocker counts as finished once it is closed or carries
+`$CLAUDEFLOW_LABEL_LANDED`, which puts its work on the integration branch you
+are building from. So everything this issue was recorded as needing is already
+there.
+
+Dependencies are the user's. Do not add, remove or change one.
+
+If you find that this issue needs work that is neither done nor recorded as a
+dependency, ask about it (step 3). That might be the parent or this thread saying
+"after #12", or code showing this issue needs something an open issue is meant
+to add. Name the issue and quote the evidence, and propose recording it as a
+dependency. Do not build the missing piece here, and do not build around its
+absence. A sibling listed earlier is not a prerequisite because of its position
+alone, and this issue's own sub-issues are step 1a's business.
 
 ## 2. Post your plan before writing code
 

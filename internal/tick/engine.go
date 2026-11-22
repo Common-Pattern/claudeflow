@@ -130,6 +130,7 @@ func (e Engine) Once(ctx context.Context) error {
 		return fmt.Errorf("list queued issues: %w", err)
 	}
 	build, plan := SplitQueued(open, e.Cfg.Labels)
+	build = e.holdWaiting(ctx, build)
 
 	live, err := e.liveRuns()
 	if err != nil {

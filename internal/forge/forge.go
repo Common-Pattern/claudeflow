@@ -34,6 +34,19 @@ type Issue struct {
 	Title     string
 	Labels    []string
 	CreatedAt time.Time
+	// BlockedBy are the issues GitHub records as blocking this one, in this
+	// repository or another. Only OpenIssues fills it.
+	BlockedBy []Blocker
+}
+
+// Blocker is one issue recorded as blocking another.
+type Blocker struct {
+	Number int
+	// Repo is the blocker's repository in "owner/name" form. GitHub lets an
+	// issue be blocked by one in another repository, whose labels mean nothing
+	// to this configuration.
+	Repo string
+	Open bool
 }
 
 // HasLabel reports whether the issue carries name.

@@ -193,6 +193,24 @@ func TestIssueSkillHandlesParentsAndSubIssues(t *testing.T) {
 	}
 }
 
+// Dependencies are the user's: claudeflow enforces the recorded ones, and the
+// agent asks about any it finds rather than recording them itself. An agent
+// that recorded its own would hold work on its own judgement, with nothing
+// prompting a human to check it.
+func TestIssueSkillLeavesDependenciesToTheUser(t *testing.T) {
+	raw, err := Read(Issue, "")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, "addBlockedBy") {
+		t.Error("issue skill tells the agent to record dependencies itself")
+	}
+	if !strings.Contains(body, "Do not add, remove or change one") {
+		t.Error("issue skill does not say dependencies are the user's")
+	}
+}
+
 // The pull request is forgotten once it merges; the issue is what the user
 // comes back to. Every skill that ends with an issue comment has to put what
 // it left unfixed there, not only in the pull request body.
