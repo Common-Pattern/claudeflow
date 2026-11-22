@@ -60,6 +60,19 @@ clock is generous precisely so that you can.
 If something genuinely cannot be waited on, that is a reason to stop and say so
 on the issue, not a reason to stop quietly and hope.
 
+**Nothing you leave on this machine outlives you either.** Your checkout, and
+everything in it, may be thrown away the moment you stop. The next run starts
+from what is on `origin`. So before you stop for any reason — a question, a
+plan waiting for sign-off, work stopped partway — commit what is worth keeping
+and push it:
+
+```
+git push -u origin "$CLAUDEFLOW_BRANCH"
+```
+
+Until you open its pull request the branch runs nothing when pushed, so this
+costs nothing. Push only that branch. Work you did not push did not happen.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:
@@ -80,7 +93,8 @@ starts another run — answering itself until someone notices.
 gh issue view "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" --comments
 ```
 
-Read what it links. A previous run may have left commits on this branch —
+Read what it links. A previous run may have pushed commits to this branch, and
+your checkout starts from the branch as pushed —
 `git log "origin/$CLAUDEFLOW_INTEGRATION..HEAD"` tells you. Continue that work
 rather than starting over. The user's later comments override their earlier ones.
 
@@ -151,7 +165,7 @@ a reply re-queues this run.
 
 The breakdown into sub-issues was the user's. "Larger than one pull request" in
 step 3 is not a reason to ask about a parent; an unclear sub-issue is. Ask about
-it here, naming it, and stop with the commits you already have on the branch.
+it here, naming it, and stop with the commits you already have, pushed.
 Do not skip past it to finish the rest: a run that stops mid-list must stop at a
 known point. The next run finds those commits (step 1) and starts at the first
 sub-issue that has none.
@@ -194,7 +208,7 @@ Ask when the issue names no outcome you could verify, when it needs a product
 decision, when it admits more than one reasonable reading, when it contradicts
 the code, or when the work is plainly larger than one pull request.
 
-Post the question, then:
+Push what you have (see "This run has no second turn"), post the question, then:
 
 ```
 gh issue edit "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" \
