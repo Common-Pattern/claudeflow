@@ -71,11 +71,14 @@ type Run struct {
 	Ref  int  `json:"ref"`
 	Slot int  `json:"slot"`
 	// PID is the agent process. Zero means it was recorded but never started.
-	PID      int       `json:"pid"`
-	Branch   string    `json:"branch,omitempty"`
-	Worktree string    `json:"worktree,omitempty"`
-	Log      string    `json:"log"`
-	Started  time.Time `json:"started"`
+	PID      int    `json:"pid"`
+	Branch   string `json:"branch,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	// Sandbox names the container a sandboxed run's agent lives in. Empty
+	// for a run on the host, which is found by PID.
+	Sandbox string    `json:"sandbox,omitempty"`
+	Log     string    `json:"log"`
+	Started time.Time `json:"started"`
 
 	// Phase distinguishes a run with a live agent from one waiting on checks.
 	// Empty means PhaseRunning, so records written before this existed still

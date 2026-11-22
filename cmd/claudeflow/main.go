@@ -147,7 +147,7 @@ func run() error {
 		fmt.Println("resumed")
 		return nil
 	case "stop":
-		return stopAll(st)
+		return stopAll(engine(cfg, st), st)
 	case "land":
 		return landPR(ctx, cfg, st, rest)
 	case "housekeep":
@@ -346,6 +346,7 @@ func serveTranscripts(ctx context.Context, cfg config.Config, st *state.Store) {
 
 func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 	now := time.Now()
+	eng := engine(cfg, st)
 	fmt.Printf("repo:    %s\n", cfg.Repo)
 	fmt.Printf("branch:  %s → %s\n", cfg.Branches.Integration, cfg.Branches.Base)
 	fmt.Printf("merge:   %s\n", cfg.Merge)
@@ -379,7 +380,7 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 				label = fmt.Sprintf("checks on #%d", r.PR)
 			case r.InPhase(state.PhaseAwaitingReview):
 				label = fmt.Sprintf("review of #%d", r.PR)
-			case runner.AliveSince(r.PID, r.Started):
+			case eng.RunAlive(r):
 				label = "live"
 			}
 			fmt.Fprintf(w, "%s\t#%d\t%d\t%d\t%s\t%dm\n",
@@ -428,7 +429,7 @@ func openBlockers(i forge.Issue) string {
 	return " (blocked by " + strings.Join(open, ", ") + ")"
 }
 
-func stopAll(st *state.Store) error {
+func stopAll(eng tick.Engine, st *state.Store) error {
 	if err := st.SetFlag(state.Paused, ""); err != nil {
 		return err
 	}
@@ -437,13 +438,11 @@ func stopAll(st *state.Store) error {
 		return err
 	}
 	for _, r := range runs {
-		if !runner.AliveSince(r.PID, r.Started) {
+		if !eng.RunAlive(r) {
 			continue
 		}
-		fmt.Printf("stopping %s (pid %d)\n", r.ID(), r.PID)
-		// Signal the whole group: the agent spawns children, and leaving them
-		// behind holds the slot forever.
-		if err := syscall.Kill(-r.PID, syscall.SIGTERM); err != nil {
+		fmt.Printf("stopping %s\n", r.ID())
+		if err := eng.StopRun(r); err != nil {
 			fmt.Fprintf(os.Stderr, "  could not signal: %v\n", err)
 		}
 	}
