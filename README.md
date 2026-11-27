@@ -470,10 +470,11 @@ data:
 - **Using it.** A run gets the generation that was current when it started, as
   `CLAUDEFLOW_DATA` — in the agent's environment, the hooks', and the Compose
   file's interpolation — and keeps it for its whole life. A container sandbox
-  mounts it read-only at the same path. So a Compose file can mount
-  `${CLAUDEFLOW_DATA}` into a database container and restore from it at
-  start-up. Before anything has been prepared, `CLAUDEFLOW_DATA` is an empty
-  directory, so that mount still works.
+  mounts it read-only at the same path. What is in it, and what to do with
+  it, is the project's business: claudeflow only prepares, publishes and
+  hands over the directory, and the project tells the agent about it in
+  `agent.promptNote`. Before anything has been prepared, `CLAUDEFLOW_DATA` is
+  an empty directory, so a Compose file that mounts it still starts.
 - **Cleaning up.** A generation is removed once it is neither current, the one
   before it, nor recorded against a run.
 - **Containment.** `dir` is made `0700`, and what is inside it readable by
