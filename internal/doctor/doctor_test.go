@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/hostlogin"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 )
 
@@ -494,6 +496,7 @@ func TestUnfilledScaffoldWarns(t *testing.T) {
 }
 
 func TestContainerSandboxChecks(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	f, cfg := healthy(t)
 	cfg.Sandbox = config.Sandbox{Kind: config.SandboxContainer, Bin: "podman", Image: "localhost/sb", Env: []string{"CF_DOCTOR_TOKEN"}}
 	t.Setenv("CF_DOCTOR_TOKEN", "x")
@@ -513,5 +516,35 @@ func TestContainerSandboxChecks(t *testing.T) {
 	}
 	if r := find(rep, "sandbox credentials"); r.Status != Warn {
 		t.Errorf("sandbox credentials = %+v, want Warn with nothing set", r)
+	}
+}
+
+// Without a credential of its own, a sandboxed run shares the host's login:
+// that is fine until the login itself is about to end.
+func TestSandboxCredentialsShareTheHostLogin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	login := func(ends time.Duration) {
+		t.Helper()
+		raw := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-x","expiresAt":%d,"refreshTokenExpiresAt":%d}}`,
+			time.Now().Add(time.Hour).UnixMilli(), time.Now().Add(ends).UnixMilli())
+		if err := os.WriteFile(filepath.Join(dir, hostlogin.File), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Config{Sandbox: config.Sandbox{Kind: config.SandboxContainer}}
+
+	login(30 * 24 * time.Hour)
+	if r := checkSandboxCredentials(Options{Cfg: cfg}); r.Status != OK || !strings.Contains(r.Detail, "sharing") {
+		t.Errorf("with a month of login left = %+v, want OK, sharing", r)
+	}
+	login(3 * time.Hour)
+	if r := checkSandboxCredentials(Options{Cfg: cfg}); r.Status != Warn || !strings.Contains(r.Fix, "log in") {
+		t.Errorf("with three hours of login left = %+v, want a warning to log in again", r)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-own")
+	cfg.Sandbox.Env = []string{"CLAUDE_CODE_OAUTH_TOKEN"}
+	if r := checkSandboxCredentials(Options{Cfg: cfg}); r.Status != OK || !strings.Contains(r.Detail, "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("with a token passed in = %+v, want OK, passing it", r)
 	}
 }

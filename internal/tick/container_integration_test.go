@@ -11,6 +11,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/config"
 	"github.com/Common-Pattern/claudeflow/internal/git"
+	"github.com/Common-Pattern/claudeflow/internal/hostlogin"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 )
 
@@ -62,6 +63,11 @@ func TestIntegrationEngineWithContainerSandbox(t *testing.T) {
 set -e
 curl -fsS "$CLAUDEFLOW_URL_WEB" >/dev/null && echo '{"type":"probe","web":"ok"}'
 if [ -z "$CLAUDEFLOW_FAILING_CHECKS" ]; then
+  c="$CLAUDE_CONFIG_DIR/.credentials.json"
+  grep -q sk-ant-oat01-first "$c" && grep -q sk-ant-ort01-host "$c" && echo '{"type":"probe","login":"shared"}'
+  grep -q user-host "$CLAUDE_CONFIG_DIR/.claude.json" && echo '{"type":"probe","account":"shared"}'
+  sed -i 's/sk-ant-oat01-first/sk-ant-oat01-refreshed-in-run/' "$c"
+  mkdir -p "$CLAUDE_CONFIG_DIR/projects/-work" && echo '{"session":"sandboxed"}' > "$CLAUDE_CONFIG_DIR/projects/-work/s1.jsonl"
   podman run -d --name stray docker.io/library/nginx:alpine >/dev/null
   echo one > one.txt; git add one.txt; git commit --quiet -m "build commit"
   git push --quiet -u origin HEAD
@@ -78,6 +84,23 @@ fi
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(scripts, "agent"), []byte(agent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The operator's Claude Code directory, as the agent CLI keeps it on the
+	// host.
+	hostClaude := filepath.Join(dir, "host-claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", hostClaude)
+	if err := os.MkdirAll(hostClaude, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	login := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-first","refreshToken":"sk-ant-ort01-host","expiresAt":%d}}`,
+		time.Now().Add(8*time.Hour).UnixMilli())
+	if err := os.WriteFile(filepath.Join(hostClaude, hostlogin.File), []byte(login), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := `{"oauthAccount":{"accountUuid":"acc-host"},"userID":"user-host"}`
+	if err := os.WriteFile(filepath.Join(hostClaude, hostlogin.AccountFile), []byte(account), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +142,15 @@ fi
 		t.Fatalf("run = %+v, want one found by its sandbox", run)
 	}
 	waitUntil(t, 10*time.Minute, "the build to finish", func() bool { return !e.RunAlive(soleRun(t, e)) })
-	assertProbes(t, run.Log, `"web":"ok"`, `"build":"pushed"`)
+	assertProbes(t, run.Log, `"login":"shared"`, `"account":"shared"`, `"web":"ok"`, `"build":"pushed"`)
+	// What the run's CLI writes there is the host's: a refreshed login, and
+	// the session's transcript in the host's history.
+	if got, _ := os.ReadFile(filepath.Join(hostClaude, hostlogin.File)); !strings.Contains(string(got), "refreshed-in-run") {
+		t.Errorf("the host's login after the run refreshed it = %s", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(hostClaude, "projects", "-work", "s1.jsonl")); err != nil || !strings.Contains(string(got), "sandboxed") {
+		t.Errorf("the run's transcript is not in the host's history: %q, %v", got, err)
+	}
 
 	// The agent opened its pull request: reaping parks the run and removes
 	// the container.

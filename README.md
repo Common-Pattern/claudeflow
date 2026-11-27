@@ -345,7 +345,7 @@ paths:
 sandbox:
   kind: local
   # image: localhost/claudeflow-sandbox
-  # env: [CLAUDE_CODE_OAUTH_TOKEN]
+  # env: [CLAUDE_CODE_OAUTH_TOKEN]   # optional: runs share this host's Claude login without it
 ```
 
 ### Serving transcripts
@@ -453,7 +453,8 @@ pushed.
 What crosses back to the host is the run's transcript, its comment inbox, and
 the branch it pushes. That is also the whole of what the agent can reach on
 this machine: it does not see your home directory, your other checkouts, or
-your credentials beyond the ones handed in.
+your credentials beyond the ones handed in and the `~/.claude` directory it
+shares with this host.
 
 **Requirements.** Rootless podman, and an image carrying git, podman with a
 compose provider, and the agent CLI. `sandbox/Containerfile` is the reference
@@ -463,12 +464,38 @@ image; build it, then add your project's toolchain in an image of your own
     podman build -t localhost/claudeflow-sandbox sandbox/
 
 **Credentials.** GitHub's token goes in automatically: `GH_TOKEN`, else
-`GITHUB_TOKEN`, else whatever `gh auth token` prints. The agent CLI needs its
-own, named in `sandbox.env` and passed by name so no value appears in a command
-line or a file. For Claude Code, `claude setup-token` makes a long-lived
-`CLAUDE_CODE_OAUTH_TOKEN` for exactly this. Do not mount your interactive
-login's credentials file: a sandbox that refreshes it rotates the refresh token
-out from under your own sessions.
+`GITHUB_TOKEN`, else whatever `gh auth token` prints.
+
+Claude Code needs nothing either, as long as this host is logged in to Claude.
+Every run mounts this host's `~/.claude` at the same path and runs with
+`CLAUDE_CONFIG_DIR` pointing at it, so a sandboxed agent uses the login exactly
+as another `claude` process on this host would. That directory also holds the
+locks the CLI takes to refresh the login, so whichever process refreshes it,
+host or sandbox, does so under the same lock, and every other process sees the
+new login on its next request. Session transcripts land in `~/.claude/projects`
+as the run writes them, so local history and `/stats` include sandboxed runs.
+
+The CLI's global config is the one thing kept apart. The host keeps it in
+`~/.claude.json`, next to a lock in your home directory that a container cannot
+share. With `CLAUDE_CONFIG_DIR` set, the CLI uses `~/.claude/.claude.json`
+instead, so sandboxed runs share that one between them. Before each run
+claudeflow copies the host's account and identifiers into it (`oauthAccount`,
+`userID`, `machineID`), so runs report to Anthropic as the host does. Your MCP
+servers, per-project state and caches in `~/.claude.json` stay the host's.
+
+A run also uses the host's own `claude` binary, mounted read-only, when that is
+a native install, so its version is the host's. `claude auth status` inside a
+run reads as it does on the host.
+
+The sandbox isolates workloads; it is not a security boundary. A run can read
+and change everything in `~/.claude`, as a local run can. Runs lose the login
+when the host does: `claudeflow doctor` warns a day before the login itself has
+to be renewed in a browser.
+
+To give runs a credential of their own instead, name it in `sandbox.env`. That
+can be a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, which lasts a year,
+or an `ANTHROPIC_API_KEY`. It is passed by name, so no value appears in a
+command line or a file, and the CLI uses it in preference to the shared login.
 
 **What changes for a run.**
 

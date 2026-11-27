@@ -3,6 +3,8 @@ package tick
 import (
 	"context"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Common-Pattern/claudeflow/internal/git"
+	"github.com/Common-Pattern/claudeflow/internal/hostlogin"
 	"github.com/Common-Pattern/claudeflow/internal/sandbox"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 )
@@ -76,9 +79,35 @@ func (s containerSandbox) Launch(ctx context.Context, l Launch) (state.Run, erro
 		Stack:      r.Kind.HoldsSlot(),
 		Command:    l.Command,
 		Args:       l.Args,
-		Env:        map[string]string(l.Env),
+		Env:        maps.Clone(map[string]string(l.Env)),
 		Timeout:    l.Timeout,
 		Log:        r.Log,
+	}
+	if spec.Env == nil {
+		spec.Env = map[string]string{}
+	}
+	var binaries []string
+	if bin := hostBinary(l.Command); bin != "" {
+		// The host's own build, so a run reports the version the host does
+		// and cannot drift from it. It must not update itself in a mount the
+		// run cannot write to.
+		spec.Command = bin
+		spec.Env["DISABLE_AUTOUPDATER"] = "1"
+		binaries = append(binaries, bin)
+	}
+	// The host's Claude Code directory, shared at its own path: the login and
+	// the locks the CLI refreshes it under, and the history the run's
+	// transcripts belong in. A run is one more process using it, as a local
+	// run is. See package hostlogin.
+	claudeDir := hostlogin.ConfigDir()
+	if _, err := os.Stat(claudeDir); err != nil {
+		e.logf("%s: no Claude Code directory on this host to share with the sandbox (%v); the agent will have no login unless sandbox.env or sandbox.mounts gives it one", r.ID(), err)
+		claudeDir = ""
+	} else {
+		spec.Env["CLAUDE_CONFIG_DIR"] = claudeDir
+		if err := hostlogin.ShareAccount(hostlogin.AccountPath(), hostlogin.SharedAccountPath()); err != nil {
+			e.logf("%s: could not give sandboxes the host's Claude account (%v); runs may report as a new install", r.ID(), err)
+		}
 	}
 	if s.p.Mirror != "" {
 		spec.Mirror = sandbox.MirrorPath
@@ -100,6 +129,7 @@ func (s containerSandbox) Launch(ctx context.Context, l Launch) (state.Run, erro
 			"CLAUDEFLOW_PROJECT":  "cf",
 		}
 	}
+
 	specPath := s.specPath(r.ID())
 	if err := spec.Write(specPath); err != nil {
 		return r, fmt.Errorf("write sandbox spec: %w", err)
@@ -112,15 +142,21 @@ func (s containerSandbox) Launch(ctx context.Context, l Launch) (state.Run, erro
 		e.logf("%s: no GitHub token found (GH_TOKEN, GITHUB_TOKEN or `gh auth token`); the sandbox will not be able to push", r.ID())
 	}
 
+	start := sandbox.Start{
+		RunID:    r.ID(),
+		Slot:     r.Slot,
+		Spec:     specPath,
+		Log:      r.Log,
+		Inbox:    l.Env["CLAUDEFLOW_INBOX"],
+		Secrets:  secrets,
+		Binaries: binaries,
+	}
+	if claudeDir != "" {
+		start.ClaudeDir, start.ClaudePath = claudeDir, claudeDir
+	}
+
 	r.Started = e.now()
-	name, err := s.p.Launch(ctx, sandbox.Start{
-		RunID:   r.ID(),
-		Slot:    r.Slot,
-		Spec:    specPath,
-		Log:     r.Log,
-		Inbox:   l.Env["CLAUDEFLOW_INBOX"],
-		Secrets: secrets,
-	})
+	name, err := s.p.Launch(ctx, start)
 	if err != nil {
 		return r, err
 	}
@@ -165,6 +201,34 @@ func (s containerSandbox) Teardown(ctx context.Context, r state.Run) error {
 	}
 	_ = os.Remove(s.specPath(r.ID()))
 	return s.p.Remove(ctx, r.Sandbox)
+}
+
+// hostBinary is the agent CLI as the host runs it, when it is a single native
+// executable that can run in the sandbox as it is: the resolved path, or "".
+//
+// An install that is a script — npm's is a Node entry point beside its
+// dependencies — is not one file to mount, and the image's own copy is used.
+func hostBinary(command string) string {
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return ""
+	}
+	if path, err = filepath.EvalSymlinks(path); err != nil {
+		return ""
+	}
+	if path, err = filepath.Abs(path); err != nil {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(f, magic); err != nil || string(magic) != "\x7fELF" {
+		return ""
+	}
+	return path
 }
 
 func (s containerSandbox) Busy(ctx context.Context, slot int) (bool, error) {

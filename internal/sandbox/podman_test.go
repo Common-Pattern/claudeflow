@@ -25,12 +25,15 @@ func TestRunArgsPassSecretsByNameOnly(t *testing.T) {
 	args := testPodman().RunArgs(Start{
 		RunID: "build-7", Slot: 2, Spec: "/s/build-7.json", Log: "/l/build-7.log",
 		Inbox: "/i/build-7", Secrets: map[string]string{"GH_TOKEN": "ghp_secret"},
+		ClaudeDir: "/s/build-7.claude", ClaudePath: "/home/op/.claude",
+		Binaries: []string{"/home/op/.local/share/claude/versions/9"},
 	})
 	line := strings.Join(args, " ")
 	if strings.Contains(line, "ghp_secret") || strings.Contains(line, "visible-only-in-env") {
 		t.Fatalf("a secret value is on the command line: %s", line)
 	}
-	for _, want := range []string{"--env GH_TOKEN", "--env CF_TEST_PASSED"} {
+	for _, want := range []string{"--env GH_TOKEN", "--env CF_TEST_PASSED", "--volume /s/build-7.claude:/home/op/.claude",
+		"--volume /home/op/.local/share/claude/versions/9:/home/op/.local/share/claude/versions/9:ro"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("args lack %q: %s", want, line)
 		}

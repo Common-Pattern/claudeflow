@@ -21,6 +21,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/hostlogin"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 )
 
@@ -177,20 +178,39 @@ func checkSandboxImage(ctx context.Context, o Options) Result {
 }
 
 // checkSandboxCredentials warns when nothing would give the agent CLI inside a
-// sandbox a way to authenticate: it has none of the operator's own login, and
-// a run without one fails as soon as it starts.
+// sandbox a way to authenticate: it has none of the operator's own files, and
+// a run without a credential fails as soon as it starts.
+//
+// A credential passed in by name is used first; without one, runs share this
+// host's own Claude login, which lasts as long as the host stays logged in.
 func checkSandboxCredentials(o Options) Result {
+	if name := hostlogin.Passed(o.Cfg.Sandbox.Env); name != "" {
+		return Result{"sandbox credentials", OK, "passing " + name, ""}
+	}
+	if raw, err := os.ReadFile(hostlogin.Path()); err == nil {
+		if l, err := hostlogin.Parse(raw); err == nil {
+			if l.LoginExpires.IsZero() {
+				return Result{"sandbox credentials", OK, "sharing this host's Claude login", ""}
+			}
+			ends := l.LoginExpires.Local().Format("Mon 2 Jan 15:04")
+			if time.Until(l.LoginExpires) < 24*time.Hour {
+				return Result{"sandbox credentials", Warn, "sharing this host's Claude login, which ends " + ends,
+					"log in again on this host before then (claude auth login); sandboxed runs lose the login when the host does"}
+			}
+			return Result{"sandbox credentials", OK, "sharing this host's Claude login, until " + ends, ""}
+		}
+	}
 	for _, name := range o.Cfg.Sandbox.Env {
 		if os.Getenv(name) != "" {
 			return Result{"sandbox credentials", OK, "passing " + strings.Join(o.Cfg.Sandbox.Env, ", "), ""}
 		}
 	}
 	if len(o.Cfg.Sandbox.Mounts) > 0 {
-		return Result{"sandbox credentials", Warn, "no variable in sandbox.env is set; relying on sandbox.mounts",
+		return Result{"sandbox credentials", Warn, "no variable in sandbox.env is set and this host has no Claude login to share; relying on sandbox.mounts",
 			"make sure a mount carries the agent CLI's credentials"}
 	}
-	return Result{"sandbox credentials", Warn, "nothing passes the agent CLI a credential",
-		"run claude setup-token, export CLAUDE_CODE_OAUTH_TOKEN for claudeflow, and list it in sandbox.env"}
+	return Result{"sandbox credentials", Warn, "nothing gives the agent CLI a credential",
+		"log in with claude on this host, or run claude setup-token, export CLAUDE_CODE_OAUTH_TOKEN for claudeflow, and list it in sandbox.env"}
 }
 
 // checkSelf reports claudeflow's own version against its latest release.

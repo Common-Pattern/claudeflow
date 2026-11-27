@@ -59,6 +59,13 @@ type Start struct {
 	// Secrets are set on the podman process and passed into the container by
 	// name, so their values appear in no command line.
 	Secrets map[string]string
+	// ClaudeDir, when set, is a host directory mounted read-write at
+	// ClaudePath as the agent CLI's config directory: the host's own, shared.
+	ClaudeDir  string
+	ClaudePath string
+	// Binaries are host executables mounted read-only at their host paths:
+	// the agent CLI, so a run uses the build the host does.
+	Binaries []string
 }
 
 func (p Podman) bin() string {
@@ -108,6 +115,12 @@ func (p Podman) RunArgs(s Start) []string {
 	}
 	if p.Mirror != "" {
 		args = append(args, "--volume", p.Mirror+":"+MirrorPath+":ro")
+	}
+	if s.ClaudeDir != "" {
+		args = append(args, "--volume", s.ClaudeDir+":"+s.ClaudePath)
+	}
+	for _, b := range s.Binaries {
+		args = append(args, "--volume", b+":"+b+":ro")
 	}
 	if s.Slot != 0 {
 		args = append(args, "--volume", fmt.Sprintf("%s-slot%d:%s", p.Prefix, s.Slot, storagePath))

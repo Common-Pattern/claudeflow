@@ -326,9 +326,10 @@ type Sandbox struct {
 	Bin string `yaml:"bin"`
 	// Env names variables passed from claudeflow's own environment into every
 	// run, by name only: the values never appear in a command line or a file.
-	// This is how the agent CLI is given its credentials —
-	// CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY. GitHub's token is passed
-	// without being listed: see the README.
+	// Without a credential here, runs share this host's own Claude login.
+	// Naming CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY gives runs that
+	// instead. GitHub's token is passed without being listed: see the
+	// README.
 	Env []string `yaml:"env"`
 	// Mounts are extra bind mounts, "host:container" or "host:container:ro".
 	// A leading ~ on the host side is the operator's home directory.
