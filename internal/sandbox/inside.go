@@ -120,16 +120,11 @@ func Inside(ctx context.Context, specPath string) (int, error) {
 		return 1, err
 	}
 	res := proc.Wait()
-
-	if spec.Stack {
-		// Best effort, and bounded: the container is removed after this
-		// anyway, and its nested engine with it.
-		downCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if err := stack.Down(downCtx); err != nil {
-			note("compose down: %v", err)
-		}
-	}
+	// The stack is not taken down. Returning ends the container's main
+	// process, which takes everything else in the container with it, the
+	// nested engine and its stack included, and the container is then
+	// removed. An orderly compose down only added minutes, and errors from
+	// tearing down a network that was about to vanish anyway.
 	return res.ExitCode, nil
 }
 
