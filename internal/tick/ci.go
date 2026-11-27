@@ -114,11 +114,33 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 			"Checks passed on #%d but landing did not complete:\n\n```\n%v\n```\n\nThe pull request is still open.", r.PR, err))
 	}
 
+	e.deleteMergedBranch(ctx, r)
 	body := fmt.Sprintf("Landed #%d on `%s` as `%s`.", res.PR, e.Cfg.Branches.Integration, short(res.MergedSHA))
 	if len(res.Closes) > 0 && res.StandingPR != 0 {
 		body += fmt.Sprintf("\n\nThe standing pull request will close this issue when it merges into `%s`.", e.Cfg.Branches.Base)
 	}
 	return e.finishRun(ctx, r, e.Cfg.Labels.Landed, body)
+}
+
+// deleteMergedBranch removes a landed run's branch from the forge, so that
+// every pull request claudeflow merges does not leave a branch behind.
+//
+// The merge itself is done without it (see forge.GH.Merge), and a failure here
+// is only logged: the work has landed either way. Only a branch under the run
+// prefix is ever touched, never the base or the integration branch. A later
+// run for the same issue cuts the branch afresh from the integration branch,
+// which is where the landed work now is.
+func (e Engine) deleteMergedBranch(ctx context.Context, r state.Run) {
+	b := e.Cfg.Branches
+	if r.Branch == "" || !strings.HasPrefix(r.Branch, b.Prefix) || b.Prefix == "" ||
+		r.Branch == b.Base || r.Branch == b.Integration {
+		return
+	}
+	if err := e.Client.DeleteBranch(ctx, r.Branch); err != nil {
+		e.logf("%s: merged, but could not delete the branch %s: %v", r.ID(), r.Branch, err)
+		return
+	}
+	e.logf("%s: deleted the merged branch %s", r.ID(), r.Branch)
 }
 
 // handleConflict sends an agent to merge the integration branch into a green

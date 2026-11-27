@@ -47,6 +47,8 @@ type Fake struct {
 	Merged []int
 	// MergeErr, when set, fails every Merge.
 	MergeErr error
+	// DeletedBranches records every DeleteBranch, in order.
+	DeletedBranches []string
 	// Err, when set, fails every call. Used to assert error propagation.
 	Err error
 }
@@ -324,6 +326,17 @@ func (f *Fake) Merge(_ context.Context, number int, wantSHA string) error {
 		return fmt.Errorf("head moved: have %s, want %s", want, wantSHA)
 	}
 	f.Merged = append(f.Merged, number)
+	return nil
+}
+
+// DeleteBranch implements Client.
+func (f *Fake) DeleteBranch(_ context.Context, branch string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return f.Err
+	}
+	f.DeletedBranches = append(f.DeletedBranches, branch)
 	return nil
 }
 

@@ -167,3 +167,32 @@ func TestBehindBranchIsResyncedAndWaitsAgain(t *testing.T) {
 		t.Errorf("pushed branch does not contain preview: %v, %v", ok, err)
 	}
 }
+
+// Every landed pull request used to leave its branch on the forge.
+func TestLandingDeletesTheMergedBranch(t *testing.T) {
+	e, _, _ := landingWorld(t, 0)
+	f := forgeOf(e)
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued, e.Cfg.Labels.Working)
+	f.ChecksBy[200] = green()
+
+	if err := e.advanceAwaitingCI(t.Context()); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	if !slices.Equal(f.Merged, []int{200}) {
+		t.Fatalf("merged %v, want #200", f.Merged)
+	}
+	if !slices.Equal(f.DeletedBranches, []string{"claude/build-7"}) {
+		t.Errorf("deleted %v, want the run's branch", f.DeletedBranches)
+	}
+}
+
+func TestOnlyARunBranchIsDeleted(t *testing.T) {
+	e, f := newEngine(t)
+	e.Cfg.Branches.Base, e.Cfg.Branches.Integration = "main", "preview"
+	for _, b := range []string{"", "main", "preview", "feature/by-hand"} {
+		e.deleteMergedBranch(t.Context(), state.Run{Kind: state.KindBuild, Ref: 7, Branch: b})
+	}
+	if len(f.DeletedBranches) != 0 {
+		t.Errorf("deleted %v, want nothing outside the run prefix", f.DeletedBranches)
+	}
+}
