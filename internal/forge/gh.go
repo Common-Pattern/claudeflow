@@ -535,6 +535,15 @@ func (g *GH) Merge(ctx context.Context, number int, wantSHA string) error {
 	return err
 }
 
+// DeleteBranch implements Client.
+func (g *GH) DeleteBranch(ctx context.Context, branch string) error {
+	_, err := g.run(ctx, "api", "--method", "DELETE", "repos/"+g.Repo+"/git/refs/heads/"+branch)
+	if err != nil && strings.Contains(err.Error(), "Reference does not exist") {
+		return nil
+	}
+	return err
+}
+
 // CreatePR implements Client.
 func (g *GH) CreatePR(ctx context.Context, base, head, title, body string) (int, error) {
 	cmd := exec.CommandContext(ctx, g.bin(), "pr", "create", "--repo", g.Repo,

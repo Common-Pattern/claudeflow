@@ -178,6 +178,7 @@ func (e Engine) mergedByHuman(ctx context.Context, r state.Run) error {
 			body += fmt.Sprintf("\n\nThe standing pull request will close this issue when it merges into `%s`.", e.Cfg.Branches.Base)
 		}
 	}
+	e.deleteMergedBranch(ctx, r)
 	return e.finishRun(ctx, r, e.Cfg.Labels.Landed, body)
 }
 

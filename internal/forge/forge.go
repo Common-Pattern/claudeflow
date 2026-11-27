@@ -276,6 +276,9 @@ type Client interface {
 	// Merge merges a pull request, refusing if its head has moved away from
 	// wantSHA.
 	Merge(ctx context.Context, number int, wantSHA string) error
+	// DeleteBranch removes a branch from the forge. A branch that is already
+	// gone is not an error.
+	DeleteBranch(ctx context.Context, branch string) error
 	// CreatePR opens a pull request and returns its number.
 	CreatePR(ctx context.Context, base, head, title, body string) (int, error)
 }

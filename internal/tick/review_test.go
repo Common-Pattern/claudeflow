@@ -100,6 +100,9 @@ func TestHumanMergeFinishesWhenTheOperatorMerges(t *testing.T) {
 	if !slices.Contains(labels, e.Cfg.Labels.Landed) || slices.Contains(labels, e.Cfg.Labels.Review) {
 		t.Errorf("labels = %v, want landed and not review", labels)
 	}
+	if !slices.Equal(f.DeletedBranches, []string{"claude/build-7"}) {
+		t.Errorf("deleted %v, want the merged branch", f.DeletedBranches)
+	}
 }
 
 // Settling a merge is recording finished work, so a pause does not hold it.

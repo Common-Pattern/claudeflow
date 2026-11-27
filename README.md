@@ -239,7 +239,8 @@ labels:
 # Who merges a green pull request. "auto" (the default): claudeflow lands it on
 # the integration branch. "human": it waits for you, and your comments and
 # reviews on it start a revision on the same branch. See "Leaving the merge to
-# a human".
+# a human". Either way, once it has merged, the run's branch (under
+# branches.prefix) is deleted from GitHub.
 merge: auto
 
 limits:
