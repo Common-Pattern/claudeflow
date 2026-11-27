@@ -42,6 +42,7 @@ type Config struct {
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
 	Sandbox  Sandbox  `yaml:"sandbox"`
+	Data     Data     `yaml:"data"`
 
 	// Transcripts optionally serves run logs over HTTP, so that a comment can
 	// link to one instead of naming a path on a machine the reader is not on.
@@ -340,6 +341,44 @@ type Sandbox struct {
 	Remote string `yaml:"remote"`
 }
 
+// Data is a directory of data every run is given, read-only, made by a
+// script the project owns. What the data is, how it is made and how a run
+// should use it are the project's business: claudeflow only runs the script,
+// publishes what it wrote, and hands each run the result. The project tells
+// the agent about it in Agent.PromptNote.
+//
+// `claudeflow serve` runs Script on the host, in Paths.Root, often enough
+// that the data a run is given is never older than MaxAge, and `claudeflow
+// data prepare` runs it now. It is handed an empty directory in
+// CLAUDEFLOW_DATA_OUT to fill. Only when it exits zero does what it wrote
+// become the current generation: a failed or interrupted script leaves the
+// previous one in place, and a run never sees a half-written directory.
+//
+// A generation is never changed once published. Each run is given the one
+// that was current when it started, as CLAUDEFLOW_DATA — in the agent's
+// environment, the hooks', and the Compose file's interpolation — and a
+// container sandbox mounts it read-only at the same path. The old generation
+// is removed once no recorded run refers to it.
+//
+// Before anything has been prepared, CLAUDEFLOW_DATA names an empty
+// directory.
+type Data struct {
+	// Dir holds the generations. A leading ~ is the operator's home
+	// directory; a relative path is relative to Paths.Root.
+	Dir string `yaml:"dir"`
+	// Script is the shell command that fills CLAUDEFLOW_DATA_OUT.
+	Script string `yaml:"script"`
+	// MaxAge is how old the data a run is given may be. serve starts the
+	// script ahead of that deadline, by twice as long as its last run took,
+	// so the new generation is published before the current one expires. A
+	// run of the script is stopped once it has taken MaxAge, and a failure is
+	// retried after a quarter of MaxAge or half an hour, whichever is sooner.
+	MaxAge time.Duration `yaml:"maxAge"`
+}
+
+// Enabled reports whether runs are given prepared data.
+func (d Data) Enabled() bool { return d.Script != "" || d.Dir != "" }
+
 // Sandbox kinds.
 const (
 	SandboxLocal     = "local"
@@ -452,6 +491,7 @@ func Default() Config {
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
 		Sandbox: Sandbox{Kind: SandboxLocal, Bin: "podman"},
+		Data:    Data{MaxAge: 24 * time.Hour},
 		Merge:   MergeAuto,
 	}
 }
@@ -524,6 +564,17 @@ func (c *Config) applyDerivedDefaults(baseDir string) {
 	for _, p := range []*string{&c.Paths.State, &c.Paths.Worktrees} {
 		if !filepath.IsAbs(*p) {
 			*p = filepath.Join(c.Paths.Root, *p)
+		}
+	}
+	if c.Data.Enabled() {
+		switch {
+		case strings.HasPrefix(c.Data.Dir, "~/"):
+			if home, err := os.UserHomeDir(); err == nil {
+				c.Data.Dir = filepath.Join(home, c.Data.Dir[2:])
+			}
+		}
+		if c.Data.Dir != "" && !filepath.IsAbs(c.Data.Dir) {
+			c.Data.Dir = filepath.Join(c.Paths.Root, c.Data.Dir)
 		}
 	}
 }
@@ -601,6 +652,14 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("%w: sandbox.kind must be %q or %q, not %q", ErrInvalid, SandboxLocal, SandboxContainer, c.Sandbox.Kind)
+	}
+	if c.Data.Enabled() {
+		if c.Data.Dir == "" || c.Data.Script == "" {
+			return fmt.Errorf("%w: data needs both dir and script", ErrInvalid)
+		}
+		if c.Data.MaxAge <= 0 {
+			return fmt.Errorf("%w: data.maxAge must be positive", ErrInvalid)
+		}
 	}
 	if c.Transcripts.Enabled() {
 		if c.Transcripts.Host == "" {

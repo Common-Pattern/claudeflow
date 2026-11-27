@@ -128,6 +128,9 @@ func (s containerSandbox) Launch(ctx context.Context, l Launch) (state.Run, erro
 			"CLAUDEFLOW_BRANCH":   r.Branch,
 			"CLAUDEFLOW_PROJECT":  "cf",
 		}
+		if r.Data != "" {
+			spec.ComposeEnv["CLAUDEFLOW_DATA"] = r.Data
+		}
 	}
 
 	specPath := s.specPath(r.ID())
@@ -150,6 +153,7 @@ func (s containerSandbox) Launch(ctx context.Context, l Launch) (state.Run, erro
 		Inbox:    l.Env["CLAUDEFLOW_INBOX"],
 		Secrets:  secrets,
 		Binaries: binaries,
+		Data:     r.Data,
 	}
 	if claudeDir != "" {
 		start.ClaudeDir, start.ClaudePath = claudeDir, claudeDir

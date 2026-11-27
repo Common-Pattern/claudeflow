@@ -449,3 +449,44 @@ func TestContainerSandboxValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestDataTakesDirScriptAndMaxAge(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  dir: data\n  script: scripts/prep.sh\n  maxAge: 12h\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.Data.Enabled() || cfg.Data.Dir != "/checkout/data" || cfg.Data.Script != "scripts/prep.sh" || cfg.Data.MaxAge != 12*time.Hour {
+		t.Errorf("data = %+v", cfg.Data)
+	}
+}
+
+func TestDataMaxAgeDefaultsToADay(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  dir: /srv/data\n  script: x\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Data.MaxAge != 24*time.Hour {
+		t.Errorf("maxAge = %s, want 24h", cfg.Data.MaxAge)
+	}
+}
+
+func TestDataDirExpandsHome(t *testing.T) {
+	t.Setenv("HOME", "/home/op")
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  script: x\n  dir: ~/data/proj\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Data.Dir != "/home/op/data/proj" {
+		t.Errorf("data.dir = %q", cfg.Data.Dir)
+	}
+}
+
+// Half a data block is an intention the tool cannot hold.
+func TestDataNeedsBothDirAndScript(t *testing.T) {
+	for _, block := range []string{"\ndata:\n  dir: /srv/data\n", "\ndata:\n  script: x\n"} {
+		_, err := Parse([]byte(minimal+block), "/checkout")
+		if err == nil || !strings.Contains(err.Error(), "both dir and script") {
+			t.Errorf("%q: err = %v, want a complaint about dir and script", block, err)
+		}
+	}
+}

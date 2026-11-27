@@ -21,6 +21,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/data"
 	"github.com/Common-Pattern/claudeflow/internal/hostlogin"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 )
@@ -158,6 +159,9 @@ func Run(ctx context.Context, o Options) Report {
 	if o.HaveConfig {
 		r = append(r, checkComposeFile(ctx, o), checkStateDir(o), checkCheckout(ctx, o))
 		r = append(r, checkTranscripts(ctx, o))
+		if o.Cfg.Data.Enabled() {
+			r = append(r, checkData(o))
+		}
 		if o.Cfg.Sandbox.Containerised() {
 			r = append(r, checkSandboxImage(ctx, o), checkSandboxCredentials(o))
 		}
@@ -475,6 +479,24 @@ func checkStateDir(o Options) Result {
 	}
 	_ = os.Remove(probe)
 	return Result{"state directory", OK, dir, ""}
+}
+
+// checkData reports how old the data runs are given is. Missing or stale data
+// is a warning, not a failure: runs still go ahead, with less to work from.
+func checkData(o Options) Result {
+	d := o.Cfg.Data
+	s := data.Store{Dir: d.Dir}
+	g, ok := s.Current()
+	if !ok {
+		return Result{"prepared data", Warn, "nothing prepared yet in " + d.Dir,
+			"run `claudeflow data prepare`, or wait for serve to; its output is in " + s.LogPath()}
+	}
+	age := time.Since(g.Prepared).Truncate(time.Minute)
+	if age > d.MaxAge {
+		return Result{"prepared data", Warn, fmt.Sprintf("%s is %s old, past data.maxAge (%s)", g.Path, age, d.MaxAge),
+			"the last prepare probably failed: see " + s.LogPath()}
+	}
+	return Result{"prepared data", OK, fmt.Sprintf("%s, prepared %s ago", g.Path, age), ""}
 }
 
 // checkCheckout confirms paths.root is a git repository with the configured

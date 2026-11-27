@@ -11,6 +11,7 @@ import (
 
 	"github.com/Common-Pattern/claudeflow/internal/compose"
 	"github.com/Common-Pattern/claudeflow/internal/config"
+	"github.com/Common-Pattern/claudeflow/internal/data"
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/git"
 	"github.com/Common-Pattern/claudeflow/internal/land"
@@ -187,6 +188,11 @@ func (e Engine) stackEnv(n int, worktree, branch string) map[string]string {
 		"CLAUDEFLOW_WORKTREE": worktree,
 		"CLAUDEFLOW_BRANCH":   branch,
 		"CLAUDEFLOW_PROJECT":  e.Cfg.Compose.Project(n),
+	}
+	// Always set when the project prepares data, teardowns included: a
+	// Compose file that bind-mounts it does not parse without a source.
+	if d := e.dataForRun(e.Cfg.Compose.Project(n)); d != "" {
+		env["CLAUDEFLOW_DATA"] = d
 	}
 	// The project's own additions last, so it can point the compose
 	// implementation at an engine without a host-wide setting.
@@ -503,6 +509,7 @@ func (e Engine) start(ctx context.Context, s Start) error {
 	}
 	inboxEnv, inboxFlags := e.inboxArgs(run)
 	args = append(args, inboxFlags...)
+	run.Data = e.dataForRun(run.ID())
 	env := e.runEnv(s, run)
 	for k, v := range inboxEnv {
 		env[k] = v
@@ -665,6 +672,7 @@ func (e Engine) hookLogged(ctx context.Context, cmd string, slot int, worktree s
 			"CLAUDEFLOW_WORKTREE": worktree,
 			"CLAUDEFLOW_BRANCH":   branch,
 			"CLAUDEFLOW_ISSUE":    strconv.Itoa(ref),
+			"CLAUDEFLOW_DATA":     e.dataForRun(fmt.Sprintf("issue %d", ref)),
 		},
 		Timeout: e.Cfg.Limits.BuildTimeout,
 		LogPath: logPath,
@@ -764,7 +772,25 @@ func (e Engine) runEnv(s Start, r state.Run) runner.Env {
 		"CLAUDEFLOW_LABEL_REVIEW":   l.Review,
 		"CLAUDEFLOW_LABEL_PLANNING": l.Planning,
 	}
+	if r.Data != "" {
+		env["CLAUDEFLOW_DATA"] = r.Data
+	}
 	return env
+}
+
+// dataForRun is the prepared data a run starting now is given, or "" when
+// the project prepares none. A failure is logged and the run goes ahead
+// without: data is an aid to the work, not a precondition of it.
+func (e Engine) dataForRun(id string) string {
+	if !e.Cfg.Data.Enabled() {
+		return ""
+	}
+	dir, err := data.Store{Dir: e.Cfg.Data.Dir}.ForRun()
+	if err != nil {
+		e.logf("%s: no prepared data for this run: %v", id, err)
+		return ""
+	}
+	return dir
 }
 
 // where describes how to find a run's agent, for the log.

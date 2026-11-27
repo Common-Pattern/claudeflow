@@ -346,6 +346,13 @@ sandbox:
   kind: local
   # image: localhost/claudeflow-sandbox
   # env: [CLAUDE_CODE_OAUTH_TOKEN]   # optional: runs share this host's Claude login without it
+
+# Optional: a directory of data a project script prepares on the host, given
+# to every run read-only as CLAUDEFLOW_DATA. See "Giving every run prepared data".
+# data:
+#   dir: ~/.local/share/claudeflow/myproject
+#   script: scripts/prepare-run-data.sh
+#   maxAge: 24h    # the oldest data a run may be given; the default
 ```
 
 ### Serving transcripts
@@ -429,6 +436,51 @@ Both hooks run through `sh -c` in the worktree, with these in the environment:
 There is no environment hook. Bringing the stack up and down is claudeflow's
 job through the Compose file — a shell hook could name any command, including
 one that reaches another run's resources.
+
+Every hook, the agent and the Compose file also get `CLAUDEFLOW_DATA` when
+`data` is set: see the next section.
+
+### Giving every run prepared data
+
+Some things are too big or too slow to make inside every run. claudeflow can
+keep a directory of them fresh and hand it to every run:
+
+```yaml
+data:
+  dir: ~/.local/share/claudeflow/myproject
+  script: scripts/prepare-run-data.sh
+  maxAge: 24h
+```
+
+The split is deliberate. The project owns the script, what it puts in the
+directory, and what a run should do with it, which it tells the agent in
+`agent.promptNote`. claudeflow owns only keeping the directory younger than
+`maxAge` and handing it over; it knows nothing about what is inside.
+
+- **Preparing.** `claudeflow serve` runs the script on the host, in
+  `paths.root`, so that the data a run is given is never older than `maxAge`.
+  It starts the script ahead of that deadline by twice as long as its last run
+  took, or by a quarter of `maxAge` before there is a last run.
+  `claudeflow data prepare` runs it now. The script is given an empty
+  directory in `CLAUDEFLOW_DATA_OUT` to fill, is stopped once it has run for
+  `maxAge`, and leaves its output in `<dir>/prepare.log`.
+- **Publishing.** Only a run of the script that exits zero is published: its
+  directory becomes a new generation under `<dir>/generations/`, and
+  `<dir>/current` is swung to it atomically. A failure leaves the previous
+  generation in place and is retried after a quarter of `maxAge` or half an
+  hour, whichever is sooner. `status` and `doctor` say when the data is past
+  `maxAge`. Runs never see a half-written directory.
+- **Using it.** A run gets the generation that was current when it started, as
+  `CLAUDEFLOW_DATA` — in the agent's environment, the hooks', and the Compose
+  file's interpolation — and keeps it for its whole life. A container sandbox
+  mounts it read-only at the same path. Before anything has been prepared,
+  `CLAUDEFLOW_DATA` is an empty directory.
+- **Cleaning up.** A generation is removed once it is neither current, the one
+  before it, nor recorded against a run.
+- **Containment.** `dir` is made `0700`, and what is inside a generation
+  readable by anyone, so that a container's own users can read it. Anything
+  that must not reach a run belongs in the script's own temporary files, not
+  in `CLAUDEFLOW_DATA_OUT`.
 
 ### What a slot is
 
@@ -545,6 +597,7 @@ command line or a file, and the CLI uses it in preference to the shared login.
 | `claudeflow doctor` | check dependencies, authentication, versions and configuration. Non-zero if a run would not get far |
 | `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
 | `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
+| `claudeflow data [prepare]` | show the generation of prepared data runs are given, or prepare a new one now |
 | `claudeflow labels` | create or update the seven labels in the repository. Run once per repo |
 | `claudeflow version` | version, commit and build date |
 
