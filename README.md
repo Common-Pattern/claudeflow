@@ -346,6 +346,14 @@ sandbox:
   kind: local
   # image: localhost/claudeflow-sandbox
   # env: [CLAUDE_CODE_OAUTH_TOKEN]   # optional: runs share this host's Claude login without it
+
+# Optional: data prepared on the host and given to every run, read-only, as
+# CLAUDEFLOW_DATA. See "Giving every run prepared data".
+# data:
+#   prepare: scripts/prepare-run-data.sh
+#   dir: ~/.local/share/claudeflow/myproject   # default <state>/data
+#   every: 24h
+#   timeout: 1h
 ```
 
 ### Serving transcripts
@@ -429,6 +437,51 @@ Both hooks run through `sh -c` in the worktree, with these in the environment:
 There is no environment hook. Bringing the stack up and down is claudeflow's
 job through the Compose file — a shell hook could name any command, including
 one that reaches another run's resources.
+
+Every hook, the agent and the Compose file also get `CLAUDEFLOW_DATA` when
+`data.prepare` is set: see the next section.
+
+### Giving every run prepared data
+
+Some things are too big or too slow to make inside every run: a production
+database dump with its PII scrubbed, a fixture corpus, a trained model. Set
+`data.prepare` to a command that makes it, and claudeflow gives every run the
+result.
+
+```yaml
+data:
+  prepare: scripts/prepare-run-data.sh
+  every: 24h
+```
+
+- **Preparing.** `claudeflow serve` runs the command on the host, in
+  `paths.root`, whenever the current result is older than `every`, and
+  `claudeflow data prepare` runs it now. It is given an empty directory in
+  `CLAUDEFLOW_DATA_OUT` to fill, and the previous result in
+  `CLAUDEFLOW_DATA_PREVIOUS`, so it can skip work that has not changed. A
+  prepare is bounded by `timeout`. The output of the last one is in
+  `<dir>/prepare.log`.
+- **Publishing.** Only a prepare that exits zero is published: its directory
+  becomes a new generation under `<dir>/generations/`, and `<dir>/current` is
+  swung to it atomically. A failed prepare leaves the previous generation in
+  place and is retried after `every` or an hour, whichever is sooner. Runs never
+  see a half-written directory.
+- **Using it.** A run gets the generation that was current when it started, as
+  `CLAUDEFLOW_DATA` — in the agent's environment, the hooks', and the Compose
+  file's interpolation — and keeps it for its whole life. A container sandbox
+  mounts it read-only at the same path. So a Compose file can mount
+  `${CLAUDEFLOW_DATA}` into a database container and restore from it at
+  start-up. Before anything has been prepared, `CLAUDEFLOW_DATA` is an empty
+  directory, so that mount still works.
+- **Cleaning up.** A generation is removed once it is neither current, the one
+  before it, nor recorded against a run.
+- **Containment.** `dir` is made `0700`, and what is inside it readable by
+  anyone, so that a container's own users (a database server's, say) can read
+  it. Anything that must never reach an agent — an unscrubbed dump — belongs
+  in the prepare command's own temporary files, not in `CLAUDEFLOW_DATA_OUT`.
+
+`claudeflow status` and `claudeflow doctor` say how old the current generation
+is.
 
 ### What a slot is
 
@@ -545,6 +598,7 @@ command line or a file, and the CLI uses it in preference to the shared login.
 | `claudeflow doctor` | check dependencies, authentication, versions and configuration. Non-zero if a run would not get far |
 | `claudeflow land <pr>` | merge a green pull request and sync the checkout. Normally done for you |
 | `claudeflow housekeep` | reclaim worktrees whose branch is merged. `--dry-run` to look first |
+| `claudeflow data [prepare]` | show the generation of prepared data runs are given, or prepare a new one now |
 | `claudeflow labels` | create or update the seven labels in the repository. Run once per repo |
 | `claudeflow version` | version, commit and build date |
 

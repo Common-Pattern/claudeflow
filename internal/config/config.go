@@ -42,6 +42,7 @@ type Config struct {
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
 	Sandbox  Sandbox  `yaml:"sandbox"`
+	Data     Data     `yaml:"data"`
 
 	// Transcripts optionally serves run logs over HTTP, so that a comment can
 	// link to one instead of naming a path on a machine the reader is not on.
@@ -340,6 +341,44 @@ type Sandbox struct {
 	Remote string `yaml:"remote"`
 }
 
+// Data is a directory of prepared data every run is given, read-only — a
+// scrubbed production dump, a fixture corpus, anything too large or too slow
+// to make inside each run.
+//
+// Prepare is a command run on the host, in Paths.Root, by `claudeflow serve`
+// every Every, and on demand by `claudeflow data prepare`. It is handed an
+// empty directory in CLAUDEFLOW_DATA_OUT to fill, and the previous result, if
+// any, in CLAUDEFLOW_DATA_PREVIOUS. Only when it exits zero does what it wrote
+// become the current generation: a failed or interrupted prepare leaves the
+// previous one in place, and a run never sees a half-written directory.
+//
+// A generation is never changed once published. Each run is given the one
+// that was current when it started, as CLAUDEFLOW_DATA — in the agent's
+// environment, the hooks', and the Compose file's interpolation — and a
+// container sandbox mounts it read-only at the same path. A refresh
+// therefore cannot change data under a run that is reading it; the old
+// generation is removed once no recorded run refers to it.
+//
+// Before anything has been prepared, CLAUDEFLOW_DATA names an empty
+// directory, so a Compose file that bind-mounts it still starts.
+type Data struct {
+	// Prepare is the shell command that produces a generation. Empty turns
+	// the feature off.
+	Prepare string `yaml:"prepare"`
+	// Dir holds the generations. Defaults to <State>/data. A leading ~ is the
+	// operator's home directory; a relative path is relative to Paths.Root.
+	Dir string `yaml:"dir"`
+	// Every is how old the current generation may get before serve prepares
+	// another. A failed prepare is retried after the same interval, or an
+	// hour, whichever is sooner.
+	Every time.Duration `yaml:"every"`
+	// Timeout bounds one prepare.
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// Enabled reports whether runs are given prepared data.
+func (d Data) Enabled() bool { return d.Prepare != "" }
+
 // Sandbox kinds.
 const (
 	SandboxLocal     = "local"
@@ -452,6 +491,7 @@ func Default() Config {
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
 		Sandbox: Sandbox{Kind: SandboxLocal, Bin: "podman"},
+		Data:    Data{Every: 24 * time.Hour, Timeout: time.Hour},
 		Merge:   MergeAuto,
 	}
 }
@@ -524,6 +564,19 @@ func (c *Config) applyDerivedDefaults(baseDir string) {
 	for _, p := range []*string{&c.Paths.State, &c.Paths.Worktrees} {
 		if !filepath.IsAbs(*p) {
 			*p = filepath.Join(c.Paths.Root, *p)
+		}
+	}
+	if c.Data.Enabled() {
+		switch {
+		case c.Data.Dir == "":
+			c.Data.Dir = filepath.Join(c.Paths.State, "data")
+		case strings.HasPrefix(c.Data.Dir, "~/"):
+			if home, err := os.UserHomeDir(); err == nil {
+				c.Data.Dir = filepath.Join(home, c.Data.Dir[2:])
+			}
+		}
+		if !filepath.IsAbs(c.Data.Dir) {
+			c.Data.Dir = filepath.Join(c.Paths.Root, c.Data.Dir)
 		}
 	}
 }
@@ -601,6 +654,13 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("%w: sandbox.kind must be %q or %q, not %q", ErrInvalid, SandboxLocal, SandboxContainer, c.Sandbox.Kind)
+	}
+	if c.Data.Enabled() {
+		if c.Data.Every <= 0 || c.Data.Timeout <= 0 {
+			return fmt.Errorf("%w: data.every and data.timeout must be positive", ErrInvalid)
+		}
+	} else if c.Data.Dir != "" {
+		return fmt.Errorf("%w: data.dir has no effect without data.prepare", ErrInvalid)
 	}
 	if c.Transcripts.Enabled() {
 		if c.Transcripts.Host == "" {

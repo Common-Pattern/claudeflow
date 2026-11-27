@@ -359,6 +359,7 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 	logPath := filepath.Join(e.Store.LogDir(),
 		fmt.Sprintf("%s-%s.log", logName, e.now().UTC().Format("20060102T150405")))
 
+	r.Data = e.dataForRun(r.ID())
 	env := e.runEnv(Start{Kind: r.Kind, Ref: r.Ref, Slot: r.Slot}, r)
 	env["CLAUDEFLOW_PR"] = strconv.Itoa(r.PR)
 	for k, v := range extra {

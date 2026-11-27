@@ -106,3 +106,13 @@ func TestEnsureSourceCreatesAMissingDirectory(t *testing.T) {
 		t.Fatal("replaced an existing file")
 	}
 }
+
+// A run's prepared data is read-only to it: a generation is shared by every
+// run that starts while it is current.
+func TestRunArgsMountDataReadOnly(t *testing.T) {
+	args := testPodman().RunArgs(Start{RunID: "build-7", Spec: "/s", Log: "/l", Data: "/d/generations/20261127T000000Z"})
+	line := strings.Join(args, " ")
+	if want := "--volume /d/generations/20261127T000000Z:/d/generations/20261127T000000Z:ro"; !strings.Contains(line, want) {
+		t.Errorf("args lack %q: %s", want, line)
+	}
+}

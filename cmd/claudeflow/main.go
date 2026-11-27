@@ -57,6 +57,7 @@ Commands:
   stop           pause, then stop every live run
   land <pr>      merge a green pull request and sync the checkout
   housekeep      reclaim landed worktrees now
+  data [prepare] show the prepared data runs are given, or prepare it now
   init           write a starter claudeflow.yaml in this directory
   doctor         check dependencies, authentication and configuration
   labels         create or update the labels in the repository
@@ -168,6 +169,8 @@ func run() error {
 		return landPR(ctx, cfg, st, rest)
 	case "housekeep":
 		return runHousekeep(ctx, cfg, st, rest)
+	case "data":
+		return runData(ctx, cfg, st, rest)
 	case "labels":
 		return ensureLabels(ctx, cfg)
 	default:
@@ -298,6 +301,9 @@ func serve(ctx context.Context, cfg config.Config, st *state.Store, args []strin
 	if cfg.Transcripts.Enabled() {
 		go serveTranscripts(ctx, cfg, st)
 	}
+	if cfg.Data.Enabled() {
+		go refreshData(ctx, cfg, st)
+	}
 	gh := forge.NewGH(cfg.Repo)
 	var etag string
 	waker := tick.Waker{
@@ -379,6 +385,9 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 	fmt.Printf("merge:   %s\n", cfg.Merge)
 	fmt.Printf("limits:  %d builds, %d planning · slots %d–%d\n",
 		cfg.Limits.MaxBuilds, cfg.Limits.MaxPlanning, cfg.Slots.Min, cfg.Slots.Max)
+	if cfg.Data.Enabled() {
+		fmt.Println(dataSummary(cfg, now))
+	}
 
 	switch err := tick.DispatchBlocked(st, now); {
 	case errors.Is(err, tick.ErrPaused):

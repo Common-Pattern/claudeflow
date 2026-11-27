@@ -68,6 +68,9 @@ type Start struct {
 	// Binaries are host executables mounted read-only at their host paths:
 	// the agent CLI, so a run uses the build the host does.
 	Binaries []string
+	// Data is the run's generation of prepared data, mounted read-only at
+	// its host path. Optional.
+	Data string
 }
 
 func (p Podman) bin() string {
@@ -127,6 +130,9 @@ func (p Podman) RunArgs(s Start) []string {
 	}
 	for _, b := range s.Binaries {
 		args = append(args, "--volume", b+":"+b+":ro")
+	}
+	if s.Data != "" {
+		args = append(args, "--volume", s.Data+":"+s.Data+":ro")
 	}
 	if s.Slot != 0 {
 		args = append(args, "--volume", fmt.Sprintf("%s-slot%d:%s", p.Prefix, s.Slot, storagePath))

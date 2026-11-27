@@ -76,7 +76,10 @@ type Run struct {
 	Worktree string `json:"worktree,omitempty"`
 	// Sandbox names the container a sandboxed run's agent lives in. Empty
 	// for a run on the host, which is found by PID.
-	Sandbox string    `json:"sandbox,omitempty"`
+	Sandbox string `json:"sandbox,omitempty"`
+	// Data is the generation of prepared data the run was given, kept so the
+	// generation is not removed while the run may still be reading it.
+	Data    string    `json:"data,omitempty"`
 	Log     string    `json:"log"`
 	Started time.Time `json:"started"`
 

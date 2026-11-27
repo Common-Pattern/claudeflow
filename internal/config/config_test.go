@@ -449,3 +449,38 @@ func TestContainerSandboxValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestDataDefaultsUnderState(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  prepare: scripts/prep.sh\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.Data.Enabled() {
+		t.Fatal("data is off with a prepare command set")
+	}
+	if want := "/checkout/.claudeflow/data"; cfg.Data.Dir != want {
+		t.Errorf("data.dir = %q, want %q", cfg.Data.Dir, want)
+	}
+	if cfg.Data.Every != 24*time.Hour || cfg.Data.Timeout != time.Hour {
+		t.Errorf("every/timeout = %s/%s, want 24h/1h", cfg.Data.Every, cfg.Data.Timeout)
+	}
+}
+
+func TestDataDirExpandsHome(t *testing.T) {
+	t.Setenv("HOME", "/home/op")
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  prepare: x\n  dir: ~/data/proj\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Data.Dir != "/home/op/data/proj" {
+		t.Errorf("data.dir = %q", cfg.Data.Dir)
+	}
+}
+
+// A directory with nothing to fill it is an intention the tool does not hold.
+func TestDataDirWithoutPrepareIsRejected(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ndata:\n  dir: /srv/data\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "data.prepare") {
+		t.Fatalf("err = %v, want a complaint about data.prepare", err)
+	}
+}

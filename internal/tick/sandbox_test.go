@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Common-Pattern/claudeflow/internal/data"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 )
 
@@ -208,5 +209,31 @@ func TestAllocatorAsksTheSandbox(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("Free = %d, want 2: slot 1 is busy in the sandbox", n)
+	}
+}
+
+// A run is given the current generation of prepared data, and its record
+// keeps the path so the generation outlives the swap to a newer one.
+func TestStartGivesTheRunItsData(t *testing.T) {
+	e, f := newEngine(t)
+	sb := newFakeSandbox()
+	e.Sandbox = sb
+	e.Cfg.Data.Prepare = "true"
+	e.Cfg.Data.Dir = t.TempDir()
+	g, err := data.Store{Dir: e.Cfg.Data.Dir}.Prepare(t.Context(), "true", t.TempDir(), nil, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.AddIssue(7, time.Now(), e.Cfg.Labels.Queued)
+	if err := e.Start(t.Context(), Start{Kind: state.KindBuild, Ref: 7, Slot: 1}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	l := sb.launches[0]
+	if l.Run.Data != g.Path || l.Env["CLAUDEFLOW_DATA"] != g.Path {
+		t.Errorf("run data %q, env %q, want %s", l.Run.Data, l.Env["CLAUDEFLOW_DATA"], g.Path)
+	}
+	runs, _ := e.Store.Runs()
+	if len(runs) != 1 || runs[0].Data != g.Path {
+		t.Errorf("runs = %+v, want the generation recorded", runs)
 	}
 }
