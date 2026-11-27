@@ -41,6 +41,7 @@ type Config struct {
 	Hooks    Hooks    `yaml:"hooks"`
 	Agent    Agent    `yaml:"agent"`
 	Paths    Paths    `yaml:"paths"`
+	Sandbox  Sandbox  `yaml:"sandbox"`
 
 	// Transcripts optionally serves run logs over HTTP, so that a comment can
 	// link to one instead of naming a path on a machine the reader is not on.
@@ -300,6 +301,53 @@ type Paths struct {
 	Worktrees string `yaml:"worktrees"`
 }
 
+// Sandbox says where runs happen.
+//
+// "local", the default, runs every agent on this host: a worktree of
+// Paths.Root, a Compose project per slot on the host's engine, and the agent as
+// a host process with the operator's own credentials.
+//
+// "container" gives every run a fresh container instead. The run clones its
+// branch inside it, brings the project's stack up on a nested, rootless podman
+// inside it, and runs the agent inside it. Nothing the run does reaches the
+// host except its log, its comment inbox and the GitHub branch it pushes; a
+// run's leftovers cannot reach the next run, because the next run is a new
+// container.
+type Sandbox struct {
+	// Kind is SandboxLocal or SandboxContainer.
+	Kind string `yaml:"kind"`
+	// Image is the image every run's container starts from. It must carry git,
+	// podman with a compose provider, and the agent CLI; sandbox/Containerfile
+	// is the reference, and a project adds its own toolchain on top.
+	Image string `yaml:"image"`
+	// Bin is the container engine on the host. Only podman is supported:
+	// rootless podman inside rootless podman is what gives a run its own
+	// stack without root on the host.
+	Bin string `yaml:"bin"`
+	// Env names variables passed from claudeflow's own environment into every
+	// run, by name only: the values never appear in a command line or a file.
+	// Without a credential here, runs share this host's own Claude login.
+	// Naming CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY gives runs that
+	// instead. GitHub's token is passed without being listed: see the
+	// README.
+	Env []string `yaml:"env"`
+	// Mounts are extra bind mounts, "host:container" or "host:container:ro".
+	// A leading ~ on the host side is the operator's home directory.
+	Mounts []string `yaml:"mounts"`
+	// Remote is what a run clones and pushes. Defaults to the repository on
+	// github.com over HTTPS.
+	Remote string `yaml:"remote"`
+}
+
+// Sandbox kinds.
+const (
+	SandboxLocal     = "local"
+	SandboxContainer = "container"
+)
+
+// Containerised reports whether runs happen in containers.
+func (s Sandbox) Containerised() bool { return s.Kind == SandboxContainer }
+
 // Transcripts configures the read-only HTTP server that publishes run logs.
 //
 // A failed run used to be reported as a path — "Transcript:
@@ -402,6 +450,7 @@ func Default() Config {
 		Slots:   Slots{Min: 1, Max: 4},
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
+		Sandbox: Sandbox{Kind: SandboxLocal, Bin: "podman"},
 		Merge:   MergeAuto,
 	}
 }
@@ -534,6 +583,23 @@ func (c Config) Validate() error {
 	}
 	if c.Paths.Root == "" {
 		return fmt.Errorf("%w: paths.root is required", ErrInvalid)
+	}
+	switch c.Sandbox.Kind {
+	case SandboxLocal:
+	case SandboxContainer:
+		if c.Sandbox.Image == "" {
+			return fmt.Errorf("%w: sandbox.image is required for a container sandbox", ErrInvalid)
+		}
+		if c.Sandbox.Bin != "podman" {
+			return fmt.Errorf("%w: sandbox.bin must be podman — a run's own stack needs rootless podman inside rootless podman", ErrInvalid)
+		}
+		for _, m := range c.Sandbox.Mounts {
+			if parts := strings.Split(m, ":"); len(parts) < 2 || len(parts) > 3 || parts[0] == "" || !strings.HasPrefix(parts[1], "/") {
+				return fmt.Errorf("%w: sandbox.mounts entry %q must be host:/container or host:/container:ro", ErrInvalid, m)
+			}
+		}
+	default:
+		return fmt.Errorf("%w: sandbox.kind must be %q or %q, not %q", ErrInvalid, SandboxLocal, SandboxContainer, c.Sandbox.Kind)
 	}
 	if c.Transcripts.Enabled() {
 		if c.Transcripts.Host == "" {

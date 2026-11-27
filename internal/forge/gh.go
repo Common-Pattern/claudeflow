@@ -50,6 +50,13 @@ type ghIssue struct {
 	Labels    []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+	BlockedBy struct {
+		Nodes []struct {
+			Number int    `json:"number"`
+			State  string `json:"state"`
+			URL    string `json:"url"`
+		} `json:"nodes"`
+	} `json:"blockedBy"`
 }
 
 func (gi ghIssue) toIssue() Issue {
@@ -57,13 +64,28 @@ func (gi ghIssue) toIssue() Issue {
 	for _, l := range gi.Labels {
 		labels = append(labels, l.Name)
 	}
-	return Issue{Number: gi.Number, Title: gi.Title, Labels: labels, CreatedAt: gi.CreatedAt}
+	var blockers []Blocker
+	for _, b := range gi.BlockedBy.Nodes {
+		blockers = append(blockers, Blocker{Number: b.Number, Repo: repoOfURL(b.URL), Open: b.State == "OPEN"})
+	}
+	return Issue{Number: gi.Number, Title: gi.Title, Labels: labels, CreatedAt: gi.CreatedAt, BlockedBy: blockers}
+}
+
+// repoOfURL returns "owner/name" from an issue's web URL, or "" if the URL is
+// not one.
+func repoOfURL(u string) string {
+	parts := strings.Split(strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://"), "/")
+	// host / owner / name / issues / number
+	if len(parts) < 5 || parts[3] != "issues" {
+		return ""
+	}
+	return parts[1] + "/" + parts[2]
 }
 
 // OpenIssues implements Client.
 func (g *GH) OpenIssues(ctx context.Context, withLabels ...string) ([]Issue, error) {
 	args := []string{"issue", "list", "--repo", g.Repo, "--state", "open",
-		"--limit", "200", "--json", "number,title,labels,createdAt"}
+		"--limit", "200", "--json", "number,title,labels,createdAt,blockedBy"}
 	for _, l := range withLabels {
 		args = append(args, "--label", l)
 	}

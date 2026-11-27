@@ -193,6 +193,51 @@ func TestIssueSkillHandlesParentsAndSubIssues(t *testing.T) {
 	}
 }
 
+// Dependencies are the user's: claudeflow enforces the recorded ones, and the
+// agent asks about any it finds rather than recording them itself. An agent
+// that recorded its own would hold work on its own judgement, with nothing
+// prompting a human to check it.
+func TestIssueSkillLeavesDependenciesToTheUser(t *testing.T) {
+	raw, err := Read(Issue, "")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, "addBlockedBy") {
+		t.Error("issue skill tells the agent to record dependencies itself")
+	}
+	if !strings.Contains(body, "Do not add, remove or change one") {
+		t.Error("issue skill does not say dependencies are the user's")
+	}
+}
+
+// A run's checkout may be a sandbox that is thrown away when the agent stops,
+// so anything worth keeping has to be on origin by then. Before a pull request
+// exists, pushing the branch costs nothing and every stop must push. After it
+// exists, a push re-runs the checks, so only a finished change is pushed and
+// the rest is written down on the issue instead.
+func TestSkillsSayOnlyWhatIsPushedSurvives(t *testing.T) {
+	for name, want := range map[Name]string{
+		Issue:   `git push -u origin "$CLAUDEFLOW_BRANCH"`,
+		Review:  `git push -u origin "$CLAUDEFLOW_BRANCH"`,
+		Fix:     "never work in progress",
+		Revise:  "never work in progress",
+		Resolve: "never work in progress",
+	} {
+		raw, err := Read(name, "")
+		if err != nil {
+			t.Fatalf("Read(%s): %v", name, err)
+		}
+		body := string(raw)
+		if !strings.Contains(body, "outlives you") {
+			t.Errorf("skill %s does not say the checkout is thrown away when the run stops", name)
+		}
+		if !strings.Contains(body, want) {
+			t.Errorf("skill %s does not say %q", name, want)
+		}
+	}
+}
+
 // The pull request is forgotten once it merges; the issue is what the user
 // comes back to. Every skill that ends with an issue comment has to put what
 // it left unfixed there, not only in the pull request body.

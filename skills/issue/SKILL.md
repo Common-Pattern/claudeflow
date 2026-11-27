@@ -60,6 +60,19 @@ clock is generous precisely so that you can.
 If something genuinely cannot be waited on, that is a reason to stop and say so
 on the issue, not a reason to stop quietly and hope.
 
+**Nothing you leave on this machine outlives you either.** Your checkout, and
+everything in it, may be thrown away the moment you stop. The next run starts
+from what is on `origin`. So before you stop for any reason — a question, a
+plan waiting for sign-off, work stopped partway — commit what is worth keeping
+and push it:
+
+```
+git push -u origin "$CLAUDEFLOW_BRANCH"
+```
+
+Until you open its pull request the branch runs nothing when pushed, so this
+costs nothing. Push only that branch. Work you did not push did not happen.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:
@@ -80,7 +93,8 @@ starts another run — answering itself until someone notices.
 gh issue view "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" --comments
 ```
 
-Read what it links. A previous run may have left commits on this branch —
+Read what it links. A previous run may have pushed commits to this branch, and
+your checkout starts from the branch as pushed —
 `git log "origin/$CLAUDEFLOW_INTEGRATION..HEAD"` tells you. Continue that work
 rather than starting over. The user's later comments override their earlier ones.
 
@@ -125,11 +139,15 @@ that is:
 - **closed** — it is done, or was abandoned on purpose; or
 - **carrying any of the `CLAUDEFLOW_LABEL_*` labels** — it is being run on its
   own, has already landed, or is waiting on its own thread. Doing it here as
-  well would duplicate that work and collide with it.
+  well would duplicate that work and collide with it; or
+- **recorded as blocked by an issue outside this one** that is neither closed
+  nor landed. claudeflow would hold it, so you hold it too. Hold any later
+  sub-issue that needs it as well. Report each one as waiting, and say what on.
 
 Your plan (step 2) lists every sub-issue: the ones you will do, in order, and
-the ones you are skipping, with why. A sub-issue that depends on a later one is
-a reason to reorder; say so in the plan.
+the ones you are skipping, with why. A sub-issue that depends on a later one —
+recorded as blocked by it, or plainly needing its work — is a reason to
+reorder; say so in the plan.
 
 Then take the remaining sub-issues **one at a time**. For each: implement it
 (step 4), verify (step 5), and commit it on its own with `#<sub-issue>` in the
@@ -147,13 +165,31 @@ a reply re-queues this run.
 
 The breakdown into sub-issues was the user's. "Larger than one pull request" in
 step 3 is not a reason to ask about a parent; an unclear sub-issue is. Ask about
-it here, naming it, and stop with the commits you already have on the branch.
+it here, naming it, and stop with the commits you already have, pushed.
 Do not skip past it to finish the rest: a run that stops mid-list must stop at a
 known point. The next run finds those commits (step 1) and starts at the first
 sub-issue that has none.
 
 Your closing comment (step 8) lists each sub-issue as done, skipped and why, or
 not reached.
+
+## 1b. Prerequisites are recorded, not decided
+
+claudeflow does not start an issue that GitHub records as blocked by unfinished
+work. A blocker counts as finished once it is closed or carries
+`$CLAUDEFLOW_LABEL_LANDED`, which puts its work on the integration branch you
+are building from. So everything this issue was recorded as needing is already
+there.
+
+Dependencies are the user's. Do not add, remove or change one.
+
+If you find that this issue needs work that is neither done nor recorded as a
+dependency, ask about it (step 3). That might be the parent or this thread saying
+"after #12", or code showing this issue needs something an open issue is meant
+to add. Name the issue and quote the evidence, and propose recording it as a
+dependency. Do not build the missing piece here, and do not build around its
+absence. A sibling listed earlier is not a prerequisite because of its position
+alone, and this issue's own sub-issues are step 1a's business.
 
 ## 2. Post your plan before writing code
 
@@ -172,7 +208,7 @@ Ask when the issue names no outcome you could verify, when it needs a product
 decision, when it admits more than one reasonable reading, when it contradicts
 the code, or when the work is plainly larger than one pull request.
 
-Post the question, then:
+Push what you have (see "This run has no second turn"), post the question, then:
 
 ```
 gh issue edit "$CLAUDEFLOW_ISSUE" --repo "$CLAUDEFLOW_REPO" \

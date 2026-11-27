@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Common-Pattern/claudeflow/internal/forge"
 	"github.com/Common-Pattern/claudeflow/internal/land"
@@ -92,7 +91,15 @@ func (e Engine) landRun(ctx context.Context, r state.Run) error {
 		Cfg: e.Cfg, Client: e.Client, Repo: e.Repo, Log: e.Log,
 		Required: e.Cfg.RequiredChecks,
 	}
-	res, err := l.Land(ctx, r.PR, r.Worktree)
+	worktree := r.Worktree
+	if worktree == "" {
+		// A sandboxed run's checkout was inside its container, which is gone.
+		if worktree, err = e.landingWorktree(ctx, r); err != nil {
+			e.logf("%s: could not prepare a checkout to land #%d from: %v", r.ID(), r.PR, err)
+			return err
+		}
+	}
+	res, err := l.Land(ctx, r.PR, worktree)
 	switch {
 	case errors.Is(err, land.ErrResynced):
 		// The merge of the integration branch is pushed. Its head has no
@@ -232,10 +239,8 @@ func (e Engine) finishRun(ctx context.Context, r state.Run, label, body string) 
 // integration branch into the branch when it has fallen behind.
 func (e Engine) awaitCI(ctx context.Context, r state.Run, pr int) error {
 	e.logf("%s: opened #%d; claudeflow takes it from here", r.ID(), pr)
-	if r.Kind.HoldsSlot() {
-		if err := e.stack(r.Slot).Down(ctx); err != nil {
-			e.logf("%s: teardown reported a problem: %v", r.ID(), err)
-		}
+	if err := e.sandbox().Teardown(ctx, r); err != nil {
+		e.logf("%s: teardown reported a problem: %v", r.ID(), err)
 	}
 	if e.Cfg.HumanMerges() && r.PR == 0 {
 		// First sight of the pull request. Record where its conversation
@@ -249,6 +254,7 @@ func (e Engine) awaitCI(ctx context.Context, r state.Run, pr int) error {
 	r.PR = pr
 	r.Phase = state.PhaseAwaitingCI
 	r.PID = 0
+	r.Sandbox = ""
 	// The slot is released with the stack. Keeping the number would reserve an
 	// environment for a run that is only waiting on a web request.
 	r.Slot = 0
@@ -323,23 +329,8 @@ func (e Engine) startFix(ctx context.Context, r state.Run, failing string) error
 }
 
 // resume brings a parked run's environment back up on r.Slot and sends a new
-// agent into its existing worktree and branch.
+// agent into its existing branch.
 func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, prompt, logName string, extra runner.Env) error {
-	st := e.stack(r.Slot)
-	st.Env = e.stackEnv(r.Slot, r.Worktree, r.Branch)
-	if err := st.Down(ctx); err != nil {
-		e.logf("%s: pre-emptive teardown: %v", r.ID(), err)
-	}
-	if err := st.Up(ctx); err != nil {
-		return fmt.Errorf("compose up: %w", err)
-	}
-	if err := st.WaitReady(ctx, e.Cfg.Compose.ReadyTimeout, 2*time.Second); err != nil {
-		if derr := st.Down(ctx); derr != nil {
-			e.logf("%s: teardown after a failed start: %v", r.ID(), derr)
-		}
-		return fmt.Errorf("stack did not become ready: %w", err)
-	}
-
 	instructions, err := skills.Read(name, e.Cfg.Agent.SkillsDir)
 	if err != nil {
 		return err
@@ -368,7 +359,7 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 	logPath := filepath.Join(e.Store.LogDir(),
 		fmt.Sprintf("%s-%s.log", logName, e.now().UTC().Format("20060102T150405")))
 
-	env := e.runEnv(ctx, Start{Kind: r.Kind, Ref: r.Ref, Slot: r.Slot}, r)
+	env := e.runEnv(Start{Kind: r.Kind, Ref: r.Ref, Slot: r.Slot}, r)
 	env["CLAUDEFLOW_PR"] = strconv.Itoa(r.PR)
 	for k, v := range extra {
 		env[k] = v
@@ -377,29 +368,27 @@ func (e Engine) resume(ctx context.Context, r state.Run, name skills.Name, promp
 		env[k] = v
 	}
 
-	// A fix run is a new process. Keeping the first run's start time made
-	// every fix look like a recycled pid, and the next tick reaped it and took
-	// its stack down while the agent was still working.
-	r.Started = e.now()
+	r.Log = logPath
 	e.logPrompt(r.ID(), logPath, args)
-	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
+	// A fix run is a new process, and the sandbox stamps r.Started afresh.
+	// Keeping the first run's start time made every fix look like a recycled
+	// pid, and the next tick reaped it and took its stack down while the agent
+	// was still working.
+	r, err = e.sandbox().Launch(ctx, Launch{
+		Run:     r,
+		Resume:  true,
 		Command: e.Cfg.Agent.Command,
 		Args:    args,
-		Dir:     r.Worktree,
 		Env:     env,
 		Timeout: e.Cfg.Limits.BuildTimeout,
-		LogPath: logPath,
 	})
 	if err != nil {
-		return fmt.Errorf("start agent: %w", err)
+		return err
 	}
-
-	r.PID = proc.PID()
-	r.Log = logPath
 	if err := e.Store.SaveRun(r); err != nil {
 		return err
 	}
-	e.logf("%s: %s run started (pid %d, slot %d, log %s)", r.ID(), name, r.PID, r.Slot, logPath)
+	e.logf("%s: %s run started (%s, slot %d, log %s)", r.ID(), name, where(r), r.Slot, logPath)
 	e.announceStart(ctx, r.Ref, string(name), logPath)
 	return nil
 }

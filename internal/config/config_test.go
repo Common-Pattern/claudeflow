@@ -417,3 +417,35 @@ func TestTranscriptsRequireAHost(t *testing.T) {
 		t.Fatalf("err = %v, want a complaint about the missing host", err)
 	}
 }
+
+func TestSandboxDefaultsToLocal(t *testing.T) {
+	cfg, err := Parse([]byte("repo: o/n\nuser: u\ncompose:\n  file: compose.yaml\n"), t.TempDir())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Sandbox.Containerised() {
+		t.Errorf("sandbox = %+v, want local by default", cfg.Sandbox)
+	}
+}
+
+func TestContainerSandboxValidation(t *testing.T) {
+	base := "repo: o/n\nuser: u\ncompose:\n  file: compose.yaml\n"
+	for _, c := range []struct {
+		name, yaml string
+		ok         bool
+	}{
+		{"needs an image", "sandbox:\n  kind: container\n", false},
+		{"with an image", "sandbox:\n  kind: container\n  image: localhost/x\n", true},
+		{"only podman", "sandbox:\n  kind: container\n  image: x\n  bin: docker\n", false},
+		{"unknown kind", "sandbox:\n  kind: vm\n", false},
+		{"good mount", "sandbox:\n  kind: container\n  image: x\n  mounts: [\"~/.claude:/home/podman/.claude:ro\"]\n", true},
+		{"relative container path", "sandbox:\n  kind: container\n  image: x\n  mounts: [\"/a:b\"]\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse([]byte(base+c.yaml), t.TempDir())
+			if (err == nil) != c.ok {
+				t.Errorf("Parse error = %v, want ok=%v", err, c.ok)
+			}
+		})
+	}
+}

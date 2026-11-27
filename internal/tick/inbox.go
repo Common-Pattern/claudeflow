@@ -51,7 +51,7 @@ func (e Engine) deliverInbox(ctx context.Context) {
 		return
 	}
 	for _, r := range runs {
-		if !takesInbox(r.Kind) || !r.InPhase(state.PhaseRunning) || r.PID == 0 || !runner.AliveSince(r.PID, r.Started) {
+		if !takesInbox(r.Kind) || !r.InPhase(state.PhaseRunning) || !e.sandbox().Alive(r) {
 			continue
 		}
 		dir := e.Store.InboxDir(r.ID())

@@ -34,6 +34,13 @@ with you.
 merge and stop. When the checks go green it lands the pull request; if they go
 red you or another run will be started at the failure.
 
+**Nothing you leave on this machine outlives you either.** Your checkout may be
+thrown away the moment you stop, and the next run starts from the branch as it
+was pushed. But this branch already has an open pull request, and every push to
+it runs the checks again. So push a finished change, never work in progress. If
+you stop without one, put what you found on the issue, in enough detail that the
+next run does not have to find it again.
+
 ## Sign every comment you post
 
 End every comment you write with this line, exactly:

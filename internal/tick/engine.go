@@ -28,6 +28,9 @@ type Engine struct {
 	Store  *state.Store
 	Repo   *git.Repo
 	Log    func(format string, args ...any)
+	// Sandbox is where runs happen. Nil means the local sandbox: worktrees
+	// and Compose stacks on this host.
+	Sandbox Sandbox
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -130,6 +133,7 @@ func (e Engine) Once(ctx context.Context) error {
 		return fmt.Errorf("list queued issues: %w", err)
 	}
 	build, plan := SplitQueued(open, e.Cfg.Labels)
+	build = e.holdWaiting(ctx, build)
 
 	live, err := e.liveRuns()
 	if err != nil {
@@ -198,9 +202,7 @@ func (e Engine) allocator() slot.Allocator {
 		// A slot is busy when its Compose project has containers. That covers
 		// a stack another checkout left up, which claudeflow's own records
 		// cannot see, and needs nothing configured.
-		Busy: func(ctx context.Context, n int) (bool, error) {
-			return e.stack(n).Running(ctx)
-		},
+		Busy: e.sandbox().Busy,
 	}
 }
 
@@ -216,7 +218,7 @@ func (e Engine) liveRuns() ([]state.Run, error) {
 		// A run waiting on checks has no process by design, but it still owns
 		// its issue: counting only live pids would dispatch a second run on an
 		// issue whose pull request is already open.
-		if r.InPhase(state.PhaseAwaitingCI) || r.InPhase(state.PhaseAwaitingReview) || runner.AliveSince(r.PID, r.Started) {
+		if r.InPhase(state.PhaseAwaitingCI) || r.InPhase(state.PhaseAwaitingReview) || e.sandbox().Alive(r) {
 			live = append(live, r)
 		}
 	}
@@ -234,7 +236,7 @@ func (e Engine) Reap(ctx context.Context) error {
 			// Not this function's business: no process, by design.
 			continue
 		}
-		if runner.AliveSince(r.PID, r.Started) {
+		if e.sandbox().Alive(r) {
 			continue
 		}
 		e.logf("%s: run finished", r.ID())
@@ -245,10 +247,8 @@ func (e Engine) Reap(ctx context.Context) error {
 		// pull request below and reads as a run that died.
 		if e.Cfg.HumanMerges() && r.PR != 0 {
 			if st, err := e.Client.PRState(ctx, r.PR); err == nil && st != forge.PROpen {
-				if r.Kind.HoldsSlot() {
-					if err := e.stack(r.Slot).Down(ctx); err != nil {
-						e.logf("%s: teardown reported a problem: %v", r.ID(), err)
-					}
+				if err := e.sandbox().Teardown(ctx, r); err != nil {
+					e.logf("%s: teardown reported a problem: %v", r.ID(), err)
 				}
 				if _, err := e.settleIfClosed(ctx, r); err != nil {
 					e.logf("%s: %v", r.ID(), err)
@@ -274,10 +274,10 @@ func (e Engine) Reap(ctx context.Context) error {
 			}
 		}
 		if r.Kind.HoldsSlot() {
-			e.logf("%s: taking the stack down on slot %d", r.ID(), r.Slot)
-			if err := e.stack(r.Slot).Down(ctx); err != nil {
-				e.logf("%s: teardown reported a problem: %v", r.ID(), err)
-			}
+			e.logf("%s: taking the environment down on slot %d", r.ID(), r.Slot)
+		}
+		if err := e.sandbox().Teardown(ctx, r); err != nil {
+			e.logf("%s: teardown reported a problem: %v", r.ID(), err)
 		}
 		if err := e.Store.DeleteRun(r.ID()); err != nil {
 			return err
@@ -490,117 +490,78 @@ func (e Engine) start(ctx context.Context, s Start) error {
 	run.Log = filepath.Join(e.Store.LogDir(), fmt.Sprintf("%s-%s.log", run.ID(), e.now().UTC().Format("20060102T150405")))
 
 	if s.Kind.HoldsSlot() {
-		var err error
-		if run.Branch, run.Worktree, err = e.prepare(ctx, s, run.Log); err != nil {
-			return err
-		}
+		run.Branch = e.branchFor(s)
 	}
 
 	timeout := e.Cfg.Limits.BuildTimeout
 	if s.Kind == state.KindPlan {
 		timeout = e.Cfg.Limits.PlanTimeout
 	}
-	dir := run.Worktree
-	if dir == "" {
-		dir = e.Cfg.Paths.Root
-	}
-
-	// The run outlives the tick that started it. context.WithoutCancel keeps
-	// deadlines and values while dropping cancellation, so a supervisor that
-	// exits — `claudeflow once` returning, or serve taking a SIGTERM — does not
-	// take its children with it.
-	//
-	// Without this, `once` killed the agent microseconds after spawning it: the
-	// signal context is cancelled by main's deferred stop() as the command
-	// returns, and the run died having written nothing at all. A run is bounded
-	// by its own Timeout, not by how long the supervisor happens to live.
 	args, err := e.agentArgs(s)
 	if err != nil {
 		return err
 	}
 	inboxEnv, inboxFlags := e.inboxArgs(run)
 	args = append(args, inboxFlags...)
-	env := e.runEnv(ctx, s, run)
+	env := e.runEnv(s, run)
 	for k, v := range inboxEnv {
 		env[k] = v
 	}
 
-	// Started is what re-adoption checks the pid's kernel start time against,
-	// so it is stamped at the fork. Stamped before prepare, it sat minutes early
-	// behind the install hook and a cold stack, and a live run read as a
-	// recycled pid and was reaped under its agent.
-	run.Started = e.now()
 	e.logPrompt(run.ID(), run.Log, args)
-	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
+	run, err = e.sandbox().Launch(ctx, Launch{
+		Run:     run,
 		Command: e.Cfg.Agent.Command,
 		Args:    args,
-		Dir:     dir,
 		Env:     env,
 		Timeout: timeout,
-		LogPath: run.Log,
 	})
 	if err != nil {
-		return fmt.Errorf("start agent: %w", err)
+		return err
 	}
-	run.PID = proc.PID()
 
 	if err := e.Store.SaveRun(run); err != nil {
 		return err
 	}
-	e.logf("%s: started (pid %d, slot %d, log %s)", run.ID(), run.PID, run.Slot, run.Log)
+	e.logf("%s: started (%s, slot %d, log %s)", run.ID(), where(run), run.Slot, run.Log)
 	e.announceStart(ctx, run.Ref, string(run.Kind), run.Log)
 	return nil
 }
 
-// prepare creates the worktree and brings the environment up.
-func (e Engine) prepare(ctx context.Context, s Start, logPath string) (branch, worktree string, err error) {
-	branch = e.Cfg.Branches.Prefix + string(s.Kind) + "-" + strconv.Itoa(s.Ref)
+// branchFor names the branch a slot-holding run works on.
+func (e Engine) branchFor(s Start) string {
 	if s.Kind == state.KindReview {
 		// One stable branch, not one per pull request number: the standing
 		// pull request's number changes every time one is merged, and keying
 		// off it strands a worktree and a branch on every rollover.
-		branch = e.Cfg.Branches.Prefix + "review"
+		return e.Cfg.Branches.Prefix + "review"
 	}
-	name := fmt.Sprintf("%s-%d-slot%d", s.Kind, s.Ref, s.Slot)
-	worktree = filepath.Join(e.Cfg.Paths.Worktrees, name)
+	return e.Cfg.Branches.Prefix + string(s.Kind) + "-" + strconv.Itoa(s.Ref)
+}
+
+// prepare creates the run's worktree and brings its stack up, returning the
+// worktree.
+func (e Engine) prepare(ctx context.Context, r state.Run) (string, error) {
+	worktree := filepath.Join(e.Cfg.Paths.Worktrees, fmt.Sprintf("%s-%d-slot%d", r.Kind, r.Ref, r.Slot))
 
 	if err := e.Repo.Fetch(ctx); err != nil {
 		e.logf("fetch before worktree: %v", err)
 	}
-	if err := e.ensureWorktree(ctx, worktree, branch); err != nil {
-		return "", "", err
+	if err := e.ensureWorktree(ctx, worktree, r.Branch); err != nil {
+		return "", err
 	}
 	// Install runs before the stack comes up: a Compose file that bind-mounts
 	// the worktree needs its dependencies already in place.
 	if e.Cfg.Hooks.Install != "" {
-		e.logf("%s-%d: running the install hook", s.Kind, s.Ref)
-		if err := e.hookLogged(ctx, e.Cfg.Hooks.Install, s.Slot, worktree, s.Ref, branch, logPath); err != nil {
-			return "", "", fmt.Errorf("install hook: %w", err)
+		e.logf("%s: running the install hook", r.ID())
+		if err := e.hookLogged(ctx, e.Cfg.Hooks.Install, r.Slot, worktree, r.Ref, r.Branch, r.Log); err != nil {
+			return "", fmt.Errorf("install hook: %w", err)
 		}
 	}
-
-	st := e.stack(s.Slot)
-	st.Env = e.stackEnv(s.Slot, worktree, branch)
-
-	// Take down whatever the slot's project is holding first. A previous run
-	// that was killed rather than reaped leaves containers behind, and Up
-	// against them starts nothing.
-	if err := st.Down(ctx); err != nil {
-		e.logf("%s-%d: pre-emptive teardown: %v", s.Kind, s.Ref, err)
+	if err := e.stackUp(ctx, r.Slot, worktree, r.Branch, r.ID()); err != nil {
+		return "", err
 	}
-
-	e.logf("%s-%d: bringing the stack up on slot %d (project %s)", s.Kind, s.Ref, s.Slot, st.Project)
-	if err := st.Up(ctx); err != nil {
-		return "", "", fmt.Errorf("compose up: %w", err)
-	}
-	if err := st.WaitReady(ctx, e.Cfg.Compose.ReadyTimeout, 2*time.Second); err != nil {
-		// Leave nothing half-up holding the slot.
-		if derr := st.Down(ctx); derr != nil {
-			e.logf("%s-%d: teardown after a failed start: %v", s.Kind, s.Ref, derr)
-		}
-		return "", "", fmt.Errorf("stack did not become ready: %w", err)
-	}
-	return branch, worktree, nil
+	return worktree, nil
 }
 
 // ensureWorktree leaves a worktree at path with branch checked out.
@@ -779,7 +740,9 @@ func argValue(args []string, flag string) string {
 	return ""
 }
 
-func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {
+// runEnv is the agent's environment, apart from what only the sandbox knows:
+// where its checkout is, and where the stack's services landed.
+func (e Engine) runEnv(s Start, r state.Run) runner.Env {
 	l := e.Cfg.Labels
 	env := runner.Env{
 		"CLAUDEFLOW_ISSUE":          strconv.Itoa(s.Ref),
@@ -801,14 +764,13 @@ func (e Engine) runEnv(ctx context.Context, s Start, r state.Run) runner.Env {
 		"CLAUDEFLOW_LABEL_REVIEW":   l.Review,
 		"CLAUDEFLOW_LABEL_PLANNING": l.Planning,
 	}
-	if s.Kind.HoldsSlot() {
-		resolved := e.serviceURLs(ctx, s.Slot)
-		for k, v := range resolved {
-			env[k] = v
-		}
-		for k, v := range expandAgentEnv(e.Cfg.Agent.Env, resolved) {
-			env[k] = v
-		}
-	}
 	return env
+}
+
+// where describes how to find a run's agent, for the log.
+func where(r state.Run) string {
+	if r.Sandbox != "" {
+		return "sandbox " + r.Sandbox
+	}
+	return fmt.Sprintf("pid %d", r.PID)
 }

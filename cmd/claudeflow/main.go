@@ -29,6 +29,7 @@ import (
 	"github.com/Common-Pattern/claudeflow/internal/inbox"
 	"github.com/Common-Pattern/claudeflow/internal/land"
 	"github.com/Common-Pattern/claudeflow/internal/runner"
+	"github.com/Common-Pattern/claudeflow/internal/sandbox"
 	"github.com/Common-Pattern/claudeflow/internal/scaffold"
 	"github.com/Common-Pattern/claudeflow/internal/state"
 	"github.com/Common-Pattern/claudeflow/internal/tick"
@@ -61,6 +62,7 @@ Commands:
   labels         create or update the labels in the repository
   version        print version information
   inbox          (run by a run's agent hooks) hand over comments made during it
+  sandbox-run    (run inside a sandbox container) prepare a run and start its agent
 
 Flags:
   -c path        config file (default: claudeflow.yaml, then .claudeflow.yaml)
@@ -95,6 +97,20 @@ func run() error {
 	// CLAUDEFLOW_INBOX.
 	if cmd == "inbox" {
 		return runInbox()
+	}
+
+	// sandbox-run is a sandbox container's command: claudeflow's own binary,
+	// mounted in, preparing the run its spec describes and running the agent.
+	// There is no config file in there; the spec is everything.
+	if cmd == "sandbox-run" {
+		if len(rest) != 1 {
+			return errors.New("sandbox-run needs a spec file")
+		}
+		code, err := sandbox.Inside(context.Background(), rest[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "claudeflow sandbox:", err)
+		}
+		os.Exit(code)
 	}
 
 	// init comes before the config is loaded, for the obvious reason.
@@ -147,7 +163,7 @@ func run() error {
 		fmt.Println("resumed")
 		return nil
 	case "stop":
-		return stopAll(st)
+		return stopAll(engine(cfg, st), st)
 	case "land":
 		return landPR(ctx, cfg, st, rest)
 	case "housekeep":
@@ -234,13 +250,24 @@ func loadConfig(path string) (config.Config, string, error) {
 }
 
 func engine(cfg config.Config, st *state.Store) tick.Engine {
-	return tick.Engine{
+	e := tick.Engine{
 		Cfg:    cfg,
 		Client: forge.NewGH(cfg.Repo),
 		Store:  st,
 		Repo:   git.New(cfg.Paths.Root),
 		Log:    logf,
 	}
+	if cfg.Sandbox.Containerised() {
+		sb, err := tick.NewContainerSandbox(e)
+		if err != nil {
+			// Falling back to the host would run an agent configured to be
+			// contained with the operator's own access. Refuse instead.
+			fmt.Fprintln(os.Stderr, "claudeflow:", err)
+			os.Exit(1)
+		}
+		e.Sandbox = sb
+	}
+	return e
 }
 
 // stackFor returns the Compose stack for a slot. Each slot is its own Compose
@@ -346,6 +373,7 @@ func serveTranscripts(ctx context.Context, cfg config.Config, st *state.Store) {
 
 func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 	now := time.Now()
+	eng := engine(cfg, st)
 	fmt.Printf("repo:    %s\n", cfg.Repo)
 	fmt.Printf("branch:  %s → %s\n", cfg.Branches.Integration, cfg.Branches.Base)
 	fmt.Printf("merge:   %s\n", cfg.Merge)
@@ -379,7 +407,7 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 				label = fmt.Sprintf("checks on #%d", r.PR)
 			case r.InPhase(state.PhaseAwaitingReview):
 				label = fmt.Sprintf("review of #%d", r.PR)
-			case runner.AliveSince(r.PID, r.Started):
+			case eng.RunAlive(r):
 				label = "live"
 			}
 			fmt.Fprintf(w, "%s\t#%d\t%d\t%d\t%s\t%dm\n",
@@ -407,13 +435,28 @@ func status(ctx context.Context, cfg config.Config, st *state.Store) error {
 			fmt.Println("  (none)")
 		}
 		for _, i := range issues {
-			fmt.Printf("  #%d %s\n", i.Number, i.Title)
+			fmt.Printf("  #%d %s%s\n", i.Number, i.Title, openBlockers(i))
 		}
 	}
 	return nil
 }
 
-func stopAll(st *state.Store) error {
+// openBlockers names the open issues recorded as blocking i. A queued issue
+// with any that have not landed either is held, not started.
+func openBlockers(i forge.Issue) string {
+	var open []string
+	for _, b := range i.BlockedBy {
+		if b.Open {
+			open = append(open, fmt.Sprintf("#%d", b.Number))
+		}
+	}
+	if len(open) == 0 {
+		return ""
+	}
+	return " (blocked by " + strings.Join(open, ", ") + ")"
+}
+
+func stopAll(eng tick.Engine, st *state.Store) error {
 	if err := st.SetFlag(state.Paused, ""); err != nil {
 		return err
 	}
@@ -422,13 +465,11 @@ func stopAll(st *state.Store) error {
 		return err
 	}
 	for _, r := range runs {
-		if !runner.AliveSince(r.PID, r.Started) {
+		if !eng.RunAlive(r) {
 			continue
 		}
-		fmt.Printf("stopping %s (pid %d)\n", r.ID(), r.PID)
-		// Signal the whole group: the agent spawns children, and leaving them
-		// behind holds the slot forever.
-		if err := syscall.Kill(-r.PID, syscall.SIGTERM); err != nil {
+		fmt.Printf("stopping %s\n", r.ID())
+		if err := eng.StopRun(r); err != nil {
 			fmt.Fprintf(os.Stderr, "  could not signal: %v\n", err)
 		}
 	}

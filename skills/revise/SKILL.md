@@ -47,6 +47,13 @@ background, not a CI wait. Block on it in the foreground, however long it
 takes. After you push, claudeflow watches the checks: it sends a fix run if
 they go red, and tells the operator when the pull request is green again.
 
+**Nothing you leave on this machine outlives you either.** Your checkout may be
+thrown away the moment you stop, and the next run starts from the branch as it
+was pushed. But this branch already has an open pull request, and every push to
+it runs the checks again. So push a finished change, never work in progress. If
+you stop without one, put what you found on the issue, in enough detail that the
+next run does not have to find it again.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:

@@ -48,6 +48,19 @@ clock is generous precisely so that you can.
 If something genuinely cannot be waited on, that is a reason to stop and say so
 on the issue, not a reason to stop quietly and hope.
 
+**Nothing you leave on this machine outlives you either.** Your checkout, and
+everything in it, may be thrown away the moment you stop. The next run starts
+from what is on `origin`. So before you stop for any reason — a question, a
+plan waiting for sign-off, work stopped partway — commit what is worth keeping
+and push it:
+
+```
+git push -u origin "$CLAUDEFLOW_BRANCH"
+```
+
+Until you open its pull request the branch runs nothing when pushed, so this
+costs nothing. Push only that branch. Work you did not push did not happen.
+
 ## Sign every comment you post
 
 End every comment you write on an issue or pull request with this line, exactly:

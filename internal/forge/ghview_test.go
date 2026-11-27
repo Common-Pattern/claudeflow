@@ -64,3 +64,27 @@ func TestGhViewBotLoginsDoNotMatchAUser(t *testing.T) {
 		}
 	}
 }
+
+// The shape is what gh 2.103 returns for `issue list --json blockedBy`: the
+// blocker's repository only appears in its URL.
+func TestDecodeIssuesReadsBlockers(t *testing.T) {
+	raw := []byte(`[{"number": 9, "title": "t", "createdAt": "2026-11-01T00:00:00Z", "labels": [],
+	  "blockedBy": {"nodes": [
+	    {"id": "I_1", "number": 4, "state": "OPEN", "title": "x", "url": "https://github.com/o/n/issues/4"},
+	    {"id": "I_2", "number": 7, "state": "CLOSED", "title": "y", "url": "https://github.com/other/repo/issues/7"}
+	  ], "totalCount": 2}}]`)
+	issues, err := decodeIssues(raw)
+	if err != nil {
+		t.Fatalf("decodeIssues: %v", err)
+	}
+	want := []Blocker{{Number: 4, Repo: "o/n", Open: true}, {Number: 7, Repo: "other/repo", Open: false}}
+	got := issues[0].BlockedBy
+	if len(got) != len(want) {
+		t.Fatalf("BlockedBy = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("BlockedBy[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
