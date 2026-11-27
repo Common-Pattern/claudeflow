@@ -3,7 +3,9 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -179,6 +181,15 @@ func (p Podman) Launch(ctx context.Context, s Start) (string, error) {
 			return "", err
 		}
 	}
+	// A mount whose source does not exist yet is created as a directory, as
+	// Docker does and podman does not. Some sources come and go with the
+	// host: /run/user is emptied at every boot, and the directories a tool
+	// keeps there exist only once it has run.
+	for _, m := range p.Mounts {
+		if err := ensureSource(expandHome(m)); err != nil {
+			return "", err
+		}
+	}
 	if _, err := p.run(ctx, s.Secrets, p.RunArgs(s)...); err != nil {
 		return "", fmt.Errorf("start sandbox: %w", err)
 	}
@@ -248,6 +259,19 @@ func touch(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// ensureSource creates the host side of a "host:container[:opts]" mount when
+// nothing is there.
+func ensureSource(mount string) error {
+	host, _, _ := strings.Cut(mount, ":")
+	if host == "" || !filepath.IsAbs(host) {
+		return nil
+	}
+	if _, err := os.Lstat(host); !errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return os.MkdirAll(host, 0o700)
 }
 
 func expandHome(mount string) string {

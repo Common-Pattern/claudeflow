@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -79,5 +81,28 @@ func TestRunArgsNoStorageWithoutASlot(t *testing.T) {
 	args := testPodman().RunArgs(Start{RunID: "plan-7", Spec: "/s/p.json", Log: "/l/p.log"})
 	if strings.Contains(strings.Join(args, " "), storagePath) {
 		t.Errorf("a slotless run got image storage: %v", args)
+	}
+}
+
+// A mount source that is not there yet is made, as Docker would: a fresh
+// /run/user after a reboot holds none of the directories tools keep there.
+func TestEnsureSourceCreatesAMissingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "run", "pnpm-locks")
+	if err := ensureSource(missing + ":/tmp/pnpm-locks"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(missing); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("source = %v, %v; want a 0700 directory", info, err)
+	}
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSource(file + ":/f:ro"); err != nil {
+		t.Fatalf("existing file: %v", err)
+	}
+	if info, _ := os.Stat(file); info.IsDir() {
+		t.Fatal("replaced an existing file")
 	}
 }

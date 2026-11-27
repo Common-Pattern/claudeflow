@@ -332,7 +332,8 @@ type Sandbox struct {
 	// README.
 	Env []string `yaml:"env"`
 	// Mounts are extra bind mounts, "host:container" or "host:container:ro".
-	// A leading ~ on the host side is the operator's home directory.
+	// A leading ~ on the host side is the operator's home directory. A host
+	// side that does not exist yet is created as a directory, as Docker does.
 	Mounts []string `yaml:"mounts"`
 	// Remote is what a run clones and pushes. Defaults to the repository on
 	// github.com over HTTPS.

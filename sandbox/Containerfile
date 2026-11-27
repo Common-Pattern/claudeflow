@@ -14,11 +14,20 @@
 # Build it locally with:
 #
 #     podman build -t localhost/claudeflow-sandbox sandbox/
-# Pinned to the podman the host runs. Newer podman (6.2) records the
-# oom_score_adj of 0 that Docker Compose asks for, which a process at the
-# rootless session's 200 cannot set, so every exec into such a container fails
-# with "permission denied" — healthchecks included. 5.7 clamps it to 200.
-FROM quay.io/podman/stable:v5.7.0
+FROM quay.io/podman/stable:latest
+
+# podman 6.2.1 or later: 6.2.0 records the oom_score_adj of 0 Docker Compose
+# asks for, which a process at the rootless session's 200 cannot set, so every
+# exec into such a container fails with "permission denied", healthchecks
+# included. 6.2.1 clamps it on exec as it already did on start
+# (podman-container-tools/podman#30243). Until Fedora's stable repository has
+# it, take that one build from updates-testing.
+RUN dnf -y upgrade podman \
+ && v=$(rpm -q --qf '%{VERSION}' podman) \
+ && if [ "$(printf '%s\n' 6.2.1 "$v" | sort -V | head -1)" != 6.2.1 ]; then \
+      dnf -y upgrade --enablerepo=updates-testing podman-6.2.1; \
+    fi \
+ && dnf clean all
 
 # docker-compose is the compose provider: with it installed, `podman compose`
 # hands off to it, through the API socket claudeflow serves inside the sandbox.
