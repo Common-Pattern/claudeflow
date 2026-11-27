@@ -55,6 +55,7 @@ func TestRunArgsMountsAndLabels(t *testing.T) {
 		"--label claudeflow.repo=o/n",
 		"--label claudeflow.slot=2",
 		"--userns=keep-id",
+		"--pids-limit=-1",
 		"--volume /l/build-7.log:/l/build-7.log",
 		"--volume /i/build-7:/i/build-7",
 		"--volume /s/build-7.json:/s/build-7.json:ro",
