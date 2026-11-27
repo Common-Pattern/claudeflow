@@ -461,8 +461,8 @@ func TestDataDefaultsUnderState(t *testing.T) {
 	if want := "/checkout/.claudeflow/data"; cfg.Data.Dir != want {
 		t.Errorf("data.dir = %q, want %q", cfg.Data.Dir, want)
 	}
-	if cfg.Data.Every != 24*time.Hour || cfg.Data.Timeout != time.Hour {
-		t.Errorf("every/timeout = %s/%s, want 24h/1h", cfg.Data.Every, cfg.Data.Timeout)
+	if cfg.Data.MaxAge != 24*time.Hour || cfg.Data.Timeout != time.Hour {
+		t.Errorf("maxAge/timeout = %s/%s, want 24h/1h", cfg.Data.MaxAge, cfg.Data.Timeout)
 	}
 }
 
@@ -482,5 +482,12 @@ func TestDataDirWithoutPrepareIsRejected(t *testing.T) {
 	_, err := Parse([]byte(minimal+"\ndata:\n  dir: /srv/data\n"), "/checkout")
 	if err == nil || !strings.Contains(err.Error(), "data.prepare") {
 		t.Fatalf("err = %v, want a complaint about data.prepare", err)
+	}
+}
+
+func TestDataTimeoutMustFitInsideMaxAge(t *testing.T) {
+	_, err := Parse([]byte(minimal+"\ndata:\n  prepare: x\n  maxAge: 1h\n  timeout: 2h\n"), "/checkout")
+	if err == nil || !strings.Contains(err.Error(), "data.timeout") {
+		t.Fatalf("err = %v, want a complaint about data.timeout", err)
 	}
 }

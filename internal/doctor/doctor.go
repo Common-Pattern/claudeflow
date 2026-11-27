@@ -492,8 +492,8 @@ func checkData(o Options) Result {
 			"run `claudeflow data prepare`, or wait for serve to; its output is in " + s.LogPath()}
 	}
 	age := time.Since(g.Prepared).Truncate(time.Minute)
-	if age > 2*d.Every {
-		return Result{"prepared data", Warn, fmt.Sprintf("%s is %s old, and data.every is %s", g.Path, age, d.Every),
+	if age > d.MaxAge {
+		return Result{"prepared data", Warn, fmt.Sprintf("%s is %s old, past data.maxAge (%s)", g.Path, age, d.MaxAge),
 			"the last prepare probably failed: see " + s.LogPath()}
 	}
 	return Result{"prepared data", OK, fmt.Sprintf("%s, prepared %s ago", g.Path, age), ""}

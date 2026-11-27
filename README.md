@@ -352,7 +352,7 @@ sandbox:
 # data:
 #   prepare: scripts/prepare-run-data.sh
 #   dir: ~/.local/share/claudeflow/myproject   # default <state>/data
-#   every: 24h
+#   maxAge: 24h    # the oldest data a run may be given
 #   timeout: 1h
 ```
 
@@ -451,11 +451,13 @@ result.
 ```yaml
 data:
   prepare: scripts/prepare-run-data.sh
-  every: 24h
+  maxAge: 24h
 ```
 
 - **Preparing.** `claudeflow serve` runs the command on the host, in
-  `paths.root`, whenever the current result is older than `every`, and
+  `paths.root`, so that the data a run is given is never older than `maxAge`:
+  it starts the next prepare ahead of that deadline by twice as long as the
+  last one took (by `timeout` before there is a last one), and
   `claudeflow data prepare` runs it now. It is given an empty directory in
   `CLAUDEFLOW_DATA_OUT` to fill, and the previous result in
   `CLAUDEFLOW_DATA_PREVIOUS`, so it can skip work that has not changed. A
@@ -464,7 +466,8 @@ data:
 - **Publishing.** Only a prepare that exits zero is published: its directory
   becomes a new generation under `<dir>/generations/`, and `<dir>/current` is
   swung to it atomically. A failed prepare leaves the previous generation in
-  place and is retried after `every` or an hour, whichever is sooner. Runs never
+  place and is retried after a quarter of `maxAge` or half an hour, whichever is
+  sooner; `status` and `doctor` say when the data is past `maxAge`. Runs never
   see a half-written directory.
 - **Using it.** A run gets the generation that was current when it started, as
   `CLAUDEFLOW_DATA` — in the agent's environment, the hooks', and the Compose

@@ -43,8 +43,8 @@ func dataSummary(cfg config.Config, now time.Time) string {
 	}
 	age := now.Sub(g.Prepared).Truncate(time.Minute)
 	stale := ""
-	if age > cfg.Data.Every {
-		stale = fmt.Sprintf(" — older than data.every (%s); see %s", cfg.Data.Every, dataStore(cfg).LogPath())
+	if age > cfg.Data.MaxAge {
+		stale = fmt.Sprintf(" — older than data.maxAge (%s); see %s", cfg.Data.MaxAge, dataStore(cfg).LogPath())
 	}
 	return fmt.Sprintf("data:    %s, prepared %s ago%s", g.Path, age, stale)
 }
@@ -86,7 +86,8 @@ func pruneData(cfg config.Config, st *state.Store) {
 	}
 }
 
-// refreshData keeps the prepared data current for as long as serve runs.
+// refreshData keeps the prepared data younger than data.maxAge for as long as
+// serve runs.
 //
 // It runs beside the tick rather than in it: a prepare can take as long as a
 // production restore does, and dispatch must not wait on it. Runs that start
@@ -94,10 +95,10 @@ func pruneData(cfg config.Config, st *state.Store) {
 // publishing generations rather than writing in place.
 func refreshData(ctx context.Context, cfg config.Config, st *state.Store) {
 	s := dataStore(cfg)
-	retry := min(cfg.Data.Every, time.Hour)
+	retry := min(cfg.Data.MaxAge/4, 30*time.Minute)
 	var failedAt time.Time
 	for {
-		if s.Due(cfg.Data.Every) && (failedAt.IsZero() || time.Since(failedAt) >= retry) {
+		if s.Due(cfg.Data.MaxAge, cfg.Data.Timeout) && (failedAt.IsZero() || time.Since(failedAt) >= retry) {
 			if _, err := prepareData(ctx, cfg, st); err != nil {
 				if ctx.Err() != nil {
 					return
@@ -114,7 +115,7 @@ func refreshData(ctx context.Context, cfg config.Config, st *state.Store) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Minute):
+		case <-time.After(min(5*time.Minute, cfg.Data.MaxAge/10)):
 		}
 	}
 }

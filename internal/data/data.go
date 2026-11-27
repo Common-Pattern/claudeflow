@@ -16,6 +16,7 @@
 //	empty/                what runs are given before anything is prepared
 //	prepare.lock          held for the length of a prepare
 //	prepare.log           the most recent prepare's output
+//	prepare.took          how long the most recent successful prepare took
 package data
 
 import (
@@ -94,11 +95,34 @@ func (s Store) ForRun() (string, error) {
 	return empty, nil
 }
 
-// Due reports whether the current generation is older than every, or missing.
-func (s Store) Due(every time.Duration) bool {
+// Due reports whether a prepare should start now for the data never to be
+// older than maxAge: there is no current generation, or it is within the
+// lead of expiring.
+//
+// A generation's age counts from when its prepare started, which is no later
+// than when its data was taken. The lead is twice the last prepare's
+// duration, so a slower one than last time still finishes in time; without a
+// record of one, it is timeout, the longest a prepare may take. Either way it
+// is capped at half of maxAge, so a slow prepare is not run continuously.
+func (s Store) Due(maxAge, timeout time.Duration) bool {
 	g, ok := s.Current()
-	return !ok || s.now().Sub(g.Prepared) >= every
+	if !ok {
+		return true
+	}
+	return s.now().Sub(g.Prepared) >= maxAge-s.lead(maxAge, timeout)
 }
+
+func (s Store) lead(maxAge, timeout time.Duration) time.Duration {
+	lead := timeout
+	if raw, err := os.ReadFile(s.tookPath()); err == nil {
+		if took, err := time.ParseDuration(strings.TrimSpace(string(raw))); err == nil {
+			lead = 2 * took
+		}
+	}
+	return min(lead, maxAge/2)
+}
+
+func (s Store) tookPath() string { return filepath.Join(s.Dir, "prepare.took") }
 
 // Prepare runs command in dir to produce a new generation and publishes it.
 // It holds a lock for its length, so the supervisor and a manual prepare do
@@ -119,7 +143,8 @@ func (s Store) Prepare(ctx context.Context, command, dir string, env map[string]
 	}
 	defer unlock()
 
-	stamp := s.now().Format(stampLayout)
+	started := s.now()
+	stamp := started.Format(stampLayout)
 	staging := filepath.Join(s.Dir, "staging-"+stamp)
 	final := filepath.Join(s.generationsDir(), stamp)
 	if _, err := os.Stat(final); err == nil {
@@ -165,6 +190,7 @@ func (s Store) Prepare(ctx context.Context, command, dir string, env map[string]
 	if err := s.point(final); err != nil {
 		return Generation{}, err
 	}
+	_ = os.WriteFile(s.tookPath(), []byte(s.now().Sub(started).Round(time.Second).String()+"\n"), 0o600)
 	at, _ := time.Parse(stampLayout, stamp)
 	return Generation{Path: final, Prepared: at}, nil
 }

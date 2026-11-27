@@ -346,7 +346,8 @@ type Sandbox struct {
 // to make inside each run.
 //
 // Prepare is a command run on the host, in Paths.Root, by `claudeflow serve`
-// every Every, and on demand by `claudeflow data prepare`. It is handed an
+// often enough that the data runs are given is never older than MaxAge, and
+// on demand by `claudeflow data prepare`. It is handed an
 // empty directory in CLAUDEFLOW_DATA_OUT to fill, and the previous result, if
 // any, in CLAUDEFLOW_DATA_PREVIOUS. Only when it exits zero does what it wrote
 // become the current generation: a failed or interrupted prepare leaves the
@@ -368,11 +369,13 @@ type Data struct {
 	// Dir holds the generations. Defaults to <State>/data. A leading ~ is the
 	// operator's home directory; a relative path is relative to Paths.Root.
 	Dir string `yaml:"dir"`
-	// Every is how old the current generation may get before serve prepares
-	// another. A failed prepare is retried after the same interval, or an
-	// hour, whichever is sooner.
-	Every time.Duration `yaml:"every"`
-	// Timeout bounds one prepare.
+	// MaxAge is how old the data a run is given may be. serve starts the next
+	// prepare ahead of that deadline, by twice as long as the last prepare
+	// took, so the new generation is published before the current one
+	// expires. A failed prepare is retried after a quarter of MaxAge or half
+	// an hour, whichever is sooner.
+	MaxAge time.Duration `yaml:"maxAge"`
+	// Timeout bounds one prepare. It must be shorter than MaxAge.
 	Timeout time.Duration `yaml:"timeout"`
 }
 
@@ -491,7 +494,7 @@ func Default() Config {
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
 		Sandbox: Sandbox{Kind: SandboxLocal, Bin: "podman"},
-		Data:    Data{Every: 24 * time.Hour, Timeout: time.Hour},
+		Data:    Data{MaxAge: 24 * time.Hour, Timeout: time.Hour},
 		Merge:   MergeAuto,
 	}
 }
@@ -656,8 +659,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%w: sandbox.kind must be %q or %q, not %q", ErrInvalid, SandboxLocal, SandboxContainer, c.Sandbox.Kind)
 	}
 	if c.Data.Enabled() {
-		if c.Data.Every <= 0 || c.Data.Timeout <= 0 {
-			return fmt.Errorf("%w: data.every and data.timeout must be positive", ErrInvalid)
+		if c.Data.MaxAge <= 0 || c.Data.Timeout <= 0 {
+			return fmt.Errorf("%w: data.maxAge and data.timeout must be positive", ErrInvalid)
+		}
+		if c.Data.Timeout >= c.Data.MaxAge {
+			return fmt.Errorf("%w: data.timeout (%s) must be shorter than data.maxAge (%s), or a prepare cannot finish before the data it replaces expires",
+				ErrInvalid, c.Data.Timeout, c.Data.MaxAge)
 		}
 	} else if c.Data.Dir != "" {
 		return fmt.Errorf("%w: data.dir has no effect without data.prepare", ErrInvalid)
