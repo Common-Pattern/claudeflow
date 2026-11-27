@@ -66,12 +66,13 @@ func (s localSandbox) Launch(ctx context.Context, l Launch) (state.Run, error) {
 	// bounded by its own Timeout, not by how long the supervisor happens to
 	// live.
 	proc, err := runner.Start(context.WithoutCancel(ctx), runner.Spawn{
-		Command: l.Command,
-		Args:    l.Args,
-		Dir:     dir,
-		Env:     env,
-		Timeout: l.Timeout,
-		LogPath: r.Log,
+		Command:              l.Command,
+		Args:                 l.Args,
+		Dir:                  dir,
+		Env:                  env,
+		Timeout:              l.Timeout,
+		LogPath:              r.Log,
+		PromptOffCommandLine: true,
 	})
 	if err != nil {
 		return r, fmt.Errorf("start agent: %w", err)
