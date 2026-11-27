@@ -75,7 +75,7 @@ func TestFailedPrepareKeepsThePrevious(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Hour)
-	_, err = s.Prepare(context.Background(), `test "$CLAUDEFLOW_DATA_PREVIOUS" = "`+first.Path+`" && touch "$CLAUDEFLOW_DATA_OUT/half" && exit 3`, t.TempDir(), nil, time.Minute)
+	_, err = s.Prepare(context.Background(), `touch "$CLAUDEFLOW_DATA_OUT/half" && exit 3`, t.TempDir(), nil, time.Minute)
 	if err == nil || !strings.Contains(err.Error(), "exited 3") {
 		t.Fatalf("err = %v, want exit 3", err)
 	}

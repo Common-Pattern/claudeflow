@@ -164,9 +164,6 @@ func (s Store) Prepare(ctx context.Context, command, dir string, env map[string]
 	}()
 
 	full := runner.Env{"CLAUDEFLOW_DATA_OUT": staging}
-	if g, ok := s.Current(); ok {
-		full["CLAUDEFLOW_DATA_PREVIOUS"] = g.Path
-	}
 	for k, v := range env {
 		full[k] = v
 	}

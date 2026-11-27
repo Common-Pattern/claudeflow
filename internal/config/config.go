@@ -348,8 +348,7 @@ type Sandbox struct {
 // Prepare is a command run on the host, in Paths.Root, by `claudeflow serve`
 // often enough that the data runs are given is never older than MaxAge, and
 // on demand by `claudeflow data prepare`. It is handed an
-// empty directory in CLAUDEFLOW_DATA_OUT to fill, and the previous result, if
-// any, in CLAUDEFLOW_DATA_PREVIOUS. Only when it exits zero does what it wrote
+// empty directory in CLAUDEFLOW_DATA_OUT to fill. Only when it exits zero does what it wrote
 // become the current generation: a failed or interrupted prepare leaves the
 // previous one in place, and a run never sees a half-written directory.
 //

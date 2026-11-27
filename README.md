@@ -459,9 +459,7 @@ data:
   it starts the next prepare ahead of that deadline by twice as long as the
   last one took (by `timeout` before there is a last one), and
   `claudeflow data prepare` runs it now. It is given an empty directory in
-  `CLAUDEFLOW_DATA_OUT` to fill, and the previous result in
-  `CLAUDEFLOW_DATA_PREVIOUS`, so it can skip work that has not changed. A
-  prepare is bounded by `timeout`. The output of the last one is in
+  `CLAUDEFLOW_DATA_OUT` to fill. A prepare is bounded by `timeout`. The output of the last one is in
   `<dir>/prepare.log`.
 - **Publishing.** Only a prepare that exits zero is published: its directory
   becomes a new generation under `<dir>/generations/`, and `<dir>/current` is
