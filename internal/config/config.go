@@ -341,45 +341,43 @@ type Sandbox struct {
 	Remote string `yaml:"remote"`
 }
 
-// Data is a directory of prepared data every run is given, read-only — a
-// scrubbed production dump, a fixture corpus, anything too large or too slow
-// to make inside each run.
+// Data is a directory of data every run is given, read-only, made by a
+// script the project owns. What the data is, how it is made and how a run
+// should use it are the project's business: claudeflow only runs the script,
+// publishes what it wrote, and hands each run the result. The project tells
+// the agent about it in Agent.PromptNote.
 //
-// Prepare is a command run on the host, in Paths.Root, by `claudeflow serve`
-// often enough that the data runs are given is never older than MaxAge, and
-// on demand by `claudeflow data prepare`. It is handed an
-// empty directory in CLAUDEFLOW_DATA_OUT to fill. Only when it exits zero does what it wrote
-// become the current generation: a failed or interrupted prepare leaves the
+// `claudeflow serve` runs Script on the host, in Paths.Root, often enough
+// that the data a run is given is never older than MaxAge, and `claudeflow
+// data prepare` runs it now. It is handed an empty directory in
+// CLAUDEFLOW_DATA_OUT to fill. Only when it exits zero does what it wrote
+// become the current generation: a failed or interrupted script leaves the
 // previous one in place, and a run never sees a half-written directory.
 //
 // A generation is never changed once published. Each run is given the one
 // that was current when it started, as CLAUDEFLOW_DATA — in the agent's
 // environment, the hooks', and the Compose file's interpolation — and a
-// container sandbox mounts it read-only at the same path. A refresh
-// therefore cannot change data under a run that is reading it; the old
-// generation is removed once no recorded run refers to it.
+// container sandbox mounts it read-only at the same path. The old generation
+// is removed once no recorded run refers to it.
 //
 // Before anything has been prepared, CLAUDEFLOW_DATA names an empty
-// directory, so a Compose file that bind-mounts it still starts.
+// directory.
 type Data struct {
-	// Prepare is the shell command that produces a generation. Empty turns
-	// the feature off.
-	Prepare string `yaml:"prepare"`
-	// Dir holds the generations. Defaults to <State>/data. A leading ~ is the
-	// operator's home directory; a relative path is relative to Paths.Root.
+	// Dir holds the generations. A leading ~ is the operator's home
+	// directory; a relative path is relative to Paths.Root.
 	Dir string `yaml:"dir"`
-	// MaxAge is how old the data a run is given may be. serve starts the next
-	// prepare ahead of that deadline, by twice as long as the last prepare
-	// took, so the new generation is published before the current one
-	// expires. A failed prepare is retried after a quarter of MaxAge or half
-	// an hour, whichever is sooner.
+	// Script is the shell command that fills CLAUDEFLOW_DATA_OUT.
+	Script string `yaml:"script"`
+	// MaxAge is how old the data a run is given may be. serve starts the
+	// script ahead of that deadline, by twice as long as its last run took,
+	// so the new generation is published before the current one expires. A
+	// run of the script is stopped once it has taken MaxAge, and a failure is
+	// retried after a quarter of MaxAge or half an hour, whichever is sooner.
 	MaxAge time.Duration `yaml:"maxAge"`
-	// Timeout bounds one prepare. It must be shorter than MaxAge.
-	Timeout time.Duration `yaml:"timeout"`
 }
 
 // Enabled reports whether runs are given prepared data.
-func (d Data) Enabled() bool { return d.Prepare != "" }
+func (d Data) Enabled() bool { return d.Script != "" || d.Dir != "" }
 
 // Sandbox kinds.
 const (
@@ -493,7 +491,7 @@ func Default() Config {
 		Compose: Compose{ProjectPrefix: "cf", ReadyTimeout: 5 * time.Minute},
 		Agent:   Agent{Command: "claude", Model: "opus"},
 		Sandbox: Sandbox{Kind: SandboxLocal, Bin: "podman"},
-		Data:    Data{MaxAge: 24 * time.Hour, Timeout: time.Hour},
+		Data:    Data{MaxAge: 24 * time.Hour},
 		Merge:   MergeAuto,
 	}
 }
@@ -570,14 +568,12 @@ func (c *Config) applyDerivedDefaults(baseDir string) {
 	}
 	if c.Data.Enabled() {
 		switch {
-		case c.Data.Dir == "":
-			c.Data.Dir = filepath.Join(c.Paths.State, "data")
 		case strings.HasPrefix(c.Data.Dir, "~/"):
 			if home, err := os.UserHomeDir(); err == nil {
 				c.Data.Dir = filepath.Join(home, c.Data.Dir[2:])
 			}
 		}
-		if !filepath.IsAbs(c.Data.Dir) {
+		if c.Data.Dir != "" && !filepath.IsAbs(c.Data.Dir) {
 			c.Data.Dir = filepath.Join(c.Paths.Root, c.Data.Dir)
 		}
 	}
@@ -658,15 +654,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%w: sandbox.kind must be %q or %q, not %q", ErrInvalid, SandboxLocal, SandboxContainer, c.Sandbox.Kind)
 	}
 	if c.Data.Enabled() {
-		if c.Data.MaxAge <= 0 || c.Data.Timeout <= 0 {
-			return fmt.Errorf("%w: data.maxAge and data.timeout must be positive", ErrInvalid)
+		if c.Data.Dir == "" || c.Data.Script == "" {
+			return fmt.Errorf("%w: data needs both dir and script", ErrInvalid)
 		}
-		if c.Data.Timeout >= c.Data.MaxAge {
-			return fmt.Errorf("%w: data.timeout (%s) must be shorter than data.maxAge (%s), or a prepare cannot finish before the data it replaces expires",
-				ErrInvalid, c.Data.Timeout, c.Data.MaxAge)
+		if c.Data.MaxAge <= 0 {
+			return fmt.Errorf("%w: data.maxAge must be positive", ErrInvalid)
 		}
-	} else if c.Data.Dir != "" {
-		return fmt.Errorf("%w: data.dir has no effect without data.prepare", ErrInvalid)
 	}
 	if c.Transcripts.Enabled() {
 		if c.Transcripts.Host == "" {

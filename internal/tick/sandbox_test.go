@@ -218,7 +218,7 @@ func TestStartGivesTheRunItsData(t *testing.T) {
 	e, f := newEngine(t)
 	sb := newFakeSandbox()
 	e.Sandbox = sb
-	e.Cfg.Data.Prepare = "true"
+	e.Cfg.Data.Script = "true"
 	e.Cfg.Data.Dir = t.TempDir()
 	g, err := data.Store{Dir: e.Cfg.Data.Dir}.Prepare(t.Context(), "true", t.TempDir(), nil, time.Minute)
 	if err != nil {

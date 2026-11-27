@@ -347,13 +347,12 @@ sandbox:
   # image: localhost/claudeflow-sandbox
   # env: [CLAUDE_CODE_OAUTH_TOKEN]   # optional: runs share this host's Claude login without it
 
-# Optional: data prepared on the host and given to every run, read-only, as
-# CLAUDEFLOW_DATA. See "Giving every run prepared data".
+# Optional: a directory of data a project script prepares on the host, given
+# to every run read-only as CLAUDEFLOW_DATA. See "Giving every run prepared data".
 # data:
-#   prepare: scripts/prepare-run-data.sh
-#   dir: ~/.local/share/claudeflow/myproject   # default <state>/data
-#   maxAge: 24h    # the oldest data a run may be given
-#   timeout: 1h
+#   dir: ~/.local/share/claudeflow/myproject
+#   script: scripts/prepare-run-data.sh
+#   maxAge: 24h    # the oldest data a run may be given; the default
 ```
 
 ### Serving transcripts
@@ -439,51 +438,49 @@ job through the Compose file — a shell hook could name any command, including
 one that reaches another run's resources.
 
 Every hook, the agent and the Compose file also get `CLAUDEFLOW_DATA` when
-`data.prepare` is set: see the next section.
+`data` is set: see the next section.
 
 ### Giving every run prepared data
 
-Some things are too big or too slow to make inside every run: a production
-database dump with its PII scrubbed, a fixture corpus, a trained model. Set
-`data.prepare` to a command that makes it, and claudeflow gives every run the
-result.
+Some things are too big or too slow to make inside every run. claudeflow can
+keep a directory of them fresh and hand it to every run:
 
 ```yaml
 data:
-  prepare: scripts/prepare-run-data.sh
+  dir: ~/.local/share/claudeflow/myproject
+  script: scripts/prepare-run-data.sh
   maxAge: 24h
 ```
 
-- **Preparing.** `claudeflow serve` runs the command on the host, in
-  `paths.root`, so that the data a run is given is never older than `maxAge`:
-  it starts the next prepare ahead of that deadline by twice as long as the
-  last one took (by `timeout` before there is a last one), and
-  `claudeflow data prepare` runs it now. It is given an empty directory in
-  `CLAUDEFLOW_DATA_OUT` to fill. A prepare is bounded by `timeout`. The output of the last one is in
-  `<dir>/prepare.log`.
-- **Publishing.** Only a prepare that exits zero is published: its directory
-  becomes a new generation under `<dir>/generations/`, and `<dir>/current` is
-  swung to it atomically. A failed prepare leaves the previous generation in
-  place and is retried after a quarter of `maxAge` or half an hour, whichever is
-  sooner; `status` and `doctor` say when the data is past `maxAge`. Runs never
-  see a half-written directory.
+The split is deliberate. The project owns the script, what it puts in the
+directory, and what a run should do with it, which it tells the agent in
+`agent.promptNote`. claudeflow owns only keeping the directory younger than
+`maxAge` and handing it over; it knows nothing about what is inside.
+
+- **Preparing.** `claudeflow serve` runs the script on the host, in
+  `paths.root`, so that the data a run is given is never older than `maxAge`.
+  It starts the script ahead of that deadline by twice as long as its last run
+  took, or by a quarter of `maxAge` before there is a last run.
+  `claudeflow data prepare` runs it now. The script is given an empty
+  directory in `CLAUDEFLOW_DATA_OUT` to fill, is stopped once it has run for
+  `maxAge`, and leaves its output in `<dir>/prepare.log`.
+- **Publishing.** Only a run of the script that exits zero is published: its
+  directory becomes a new generation under `<dir>/generations/`, and
+  `<dir>/current` is swung to it atomically. A failure leaves the previous
+  generation in place and is retried after a quarter of `maxAge` or half an
+  hour, whichever is sooner. `status` and `doctor` say when the data is past
+  `maxAge`. Runs never see a half-written directory.
 - **Using it.** A run gets the generation that was current when it started, as
   `CLAUDEFLOW_DATA` — in the agent's environment, the hooks', and the Compose
   file's interpolation — and keeps it for its whole life. A container sandbox
-  mounts it read-only at the same path. What is in it, and what to do with
-  it, is the project's business: claudeflow only prepares, publishes and
-  hands over the directory, and the project tells the agent about it in
-  `agent.promptNote`. Before anything has been prepared, `CLAUDEFLOW_DATA` is
-  an empty directory, so a Compose file that mounts it still starts.
+  mounts it read-only at the same path. Before anything has been prepared,
+  `CLAUDEFLOW_DATA` is an empty directory.
 - **Cleaning up.** A generation is removed once it is neither current, the one
   before it, nor recorded against a run.
-- **Containment.** `dir` is made `0700`, and what is inside it readable by
-  anyone, so that a container's own users (a database server's, say) can read
-  it. Anything that must never reach an agent — an unscrubbed dump — belongs
-  in the prepare command's own temporary files, not in `CLAUDEFLOW_DATA_OUT`.
-
-`claudeflow status` and `claudeflow doctor` say how old the current generation
-is.
+- **Containment.** `dir` is made `0700`, and what is inside a generation
+  readable by anyone, so that a container's own users can read it. Anything
+  that must not reach a run belongs in the script's own temporary files, not
+  in `CLAUDEFLOW_DATA_OUT`.
 
 ### What a slot is
 

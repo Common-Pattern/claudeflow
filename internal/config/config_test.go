@@ -450,25 +450,29 @@ func TestContainerSandboxValidation(t *testing.T) {
 	}
 }
 
-func TestDataDefaultsUnderState(t *testing.T) {
-	cfg, err := Parse([]byte(minimal+"\ndata:\n  prepare: scripts/prep.sh\n"), "/checkout")
+func TestDataTakesDirScriptAndMaxAge(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  dir: data\n  script: scripts/prep.sh\n  maxAge: 12h\n"), "/checkout")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !cfg.Data.Enabled() {
-		t.Fatal("data is off with a prepare command set")
+	if !cfg.Data.Enabled() || cfg.Data.Dir != "/checkout/data" || cfg.Data.Script != "scripts/prep.sh" || cfg.Data.MaxAge != 12*time.Hour {
+		t.Errorf("data = %+v", cfg.Data)
 	}
-	if want := "/checkout/.claudeflow/data"; cfg.Data.Dir != want {
-		t.Errorf("data.dir = %q, want %q", cfg.Data.Dir, want)
+}
+
+func TestDataMaxAgeDefaultsToADay(t *testing.T) {
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  dir: /srv/data\n  script: x\n"), "/checkout")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
 	}
-	if cfg.Data.MaxAge != 24*time.Hour || cfg.Data.Timeout != time.Hour {
-		t.Errorf("maxAge/timeout = %s/%s, want 24h/1h", cfg.Data.MaxAge, cfg.Data.Timeout)
+	if cfg.Data.MaxAge != 24*time.Hour {
+		t.Errorf("maxAge = %s, want 24h", cfg.Data.MaxAge)
 	}
 }
 
 func TestDataDirExpandsHome(t *testing.T) {
 	t.Setenv("HOME", "/home/op")
-	cfg, err := Parse([]byte(minimal+"\ndata:\n  prepare: x\n  dir: ~/data/proj\n"), "/checkout")
+	cfg, err := Parse([]byte(minimal+"\ndata:\n  script: x\n  dir: ~/data/proj\n"), "/checkout")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -477,17 +481,12 @@ func TestDataDirExpandsHome(t *testing.T) {
 	}
 }
 
-// A directory with nothing to fill it is an intention the tool does not hold.
-func TestDataDirWithoutPrepareIsRejected(t *testing.T) {
-	_, err := Parse([]byte(minimal+"\ndata:\n  dir: /srv/data\n"), "/checkout")
-	if err == nil || !strings.Contains(err.Error(), "data.prepare") {
-		t.Fatalf("err = %v, want a complaint about data.prepare", err)
-	}
-}
-
-func TestDataTimeoutMustFitInsideMaxAge(t *testing.T) {
-	_, err := Parse([]byte(minimal+"\ndata:\n  prepare: x\n  maxAge: 1h\n  timeout: 2h\n"), "/checkout")
-	if err == nil || !strings.Contains(err.Error(), "data.timeout") {
-		t.Fatalf("err = %v, want a complaint about data.timeout", err)
+// Half a data block is an intention the tool cannot hold.
+func TestDataNeedsBothDirAndScript(t *testing.T) {
+	for _, block := range []string{"\ndata:\n  dir: /srv/data\n", "\ndata:\n  script: x\n"} {
+		_, err := Parse([]byte(minimal+block), "/checkout")
+		if err == nil || !strings.Contains(err.Error(), "both dir and script") {
+			t.Errorf("%q: err = %v, want a complaint about dir and script", block, err)
+		}
 	}
 }

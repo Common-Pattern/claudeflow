@@ -1,6 +1,6 @@
 // Package data prepares and publishes the directory of data every run is given.
 //
-// A project's prepare command fills an empty staging directory. Only when it
+// A project's script fills an empty staging directory. Only when it
 // exits zero is that directory renamed into place as a new generation and the
 // `current` link swung to it, both atomic on one filesystem, so a reader sees
 // either the old generation or the new one and never a partial write. A
@@ -95,25 +95,25 @@ func (s Store) ForRun() (string, error) {
 	return empty, nil
 }
 
-// Due reports whether a prepare should start now for the data never to be
+// Due reports whether the script should start now for the data never to be
 // older than maxAge: there is no current generation, or it is within the
 // lead of expiring.
 //
-// A generation's age counts from when its prepare started, which is no later
-// than when its data was taken. The lead is twice the last prepare's
-// duration, so a slower one than last time still finishes in time; without a
-// record of one, it is timeout, the longest a prepare may take. Either way it
-// is capped at half of maxAge, so a slow prepare is not run continuously.
-func (s Store) Due(maxAge, timeout time.Duration) bool {
+// A generation's age counts from when its script started, which is no later
+// than when its data was taken. The lead is twice the last run's duration, so
+// a slower run than last time still finishes in time; without a record of
+// one, it is a quarter of maxAge. Either way it is capped at half of maxAge,
+// so a slow script is not run continuously.
+func (s Store) Due(maxAge time.Duration) bool {
 	g, ok := s.Current()
 	if !ok {
 		return true
 	}
-	return s.now().Sub(g.Prepared) >= maxAge-s.lead(maxAge, timeout)
+	return s.now().Sub(g.Prepared) >= maxAge-s.lead(maxAge)
 }
 
-func (s Store) lead(maxAge, timeout time.Duration) time.Duration {
-	lead := timeout
+func (s Store) lead(maxAge time.Duration) time.Duration {
+	lead := maxAge / 4
 	if raw, err := os.ReadFile(s.tookPath()); err == nil {
 		if took, err := time.ParseDuration(strings.TrimSpace(string(raw))); err == nil {
 			lead = 2 * took
@@ -124,7 +124,8 @@ func (s Store) lead(maxAge, timeout time.Duration) time.Duration {
 
 func (s Store) tookPath() string { return filepath.Join(s.Dir, "prepare.took") }
 
-// Prepare runs command in dir to produce a new generation and publishes it.
+// Prepare runs command in dir to produce a new generation and publishes it,
+// stopping it once it has run for timeout.
 // It holds a lock for its length, so the supervisor and a manual prepare do
 // not run at once; a second caller waits for the first.
 func (s Store) Prepare(ctx context.Context, command, dir string, env map[string]string, timeout time.Duration) (Generation, error) {
@@ -171,10 +172,10 @@ func (s Store) Prepare(ctx context.Context, command, dir string, env map[string]
 	r := runner.Runner{Dir: dir, Env: full, Timeout: timeout, LogPath: s.LogPath()}
 	res, err := r.Exec(ctx, command)
 	if err != nil {
-		return Generation{}, fmt.Errorf("data.prepare: %w (see %s)", err, s.LogPath())
+		return Generation{}, fmt.Errorf("data.script: %w (see %s)", err, s.LogPath())
 	}
 	if res.ExitCode != 0 {
-		return Generation{}, fmt.Errorf("data.prepare exited %d (see %s)", res.ExitCode, s.LogPath())
+		return Generation{}, fmt.Errorf("data.script exited %d (see %s)", res.ExitCode, s.LogPath())
 	}
 
 	if err := openUp(staging); err != nil {

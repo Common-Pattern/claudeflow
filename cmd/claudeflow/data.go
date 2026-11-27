@@ -17,7 +17,7 @@ func dataStore(cfg config.Config) data.Store { return data.Store{Dir: cfg.Data.D
 // prepare a new one now.
 func runData(ctx context.Context, cfg config.Config, st *state.Store, args []string) error {
 	if !cfg.Data.Enabled() {
-		return errors.New("this project prepares no data: set data.prepare in the config")
+		return errors.New("this project prepares no data: set data.dir and data.script in the config")
 	}
 	switch {
 	case len(args) == 0:
@@ -49,14 +49,14 @@ func dataSummary(cfg config.Config, now time.Time) string {
 	return fmt.Sprintf("data:    %s, prepared %s ago%s", g.Path, age, stale)
 }
 
-// prepareData runs the project's prepare hook and prunes what no run needs.
+// prepareData runs the project's data script and prunes what no run needs.
 func prepareData(ctx context.Context, cfg config.Config, st *state.Store) (data.Generation, error) {
 	s := dataStore(cfg)
 	logf("data: preparing (log %s)", s.LogPath())
 	start := time.Now()
-	g, err := s.Prepare(ctx, cfg.Data.Prepare, cfg.Paths.Root, map[string]string{
+	g, err := s.Prepare(ctx, cfg.Data.Script, cfg.Paths.Root, map[string]string{
 		"CLAUDEFLOW_REPO": cfg.Repo,
-	}, cfg.Data.Timeout)
+	}, cfg.Data.MaxAge)
 	if err != nil {
 		return g, err
 	}
@@ -98,7 +98,7 @@ func refreshData(ctx context.Context, cfg config.Config, st *state.Store) {
 	retry := min(cfg.Data.MaxAge/4, 30*time.Minute)
 	var failedAt time.Time
 	for {
-		if s.Due(cfg.Data.MaxAge, cfg.Data.Timeout) && (failedAt.IsZero() || time.Since(failedAt) >= retry) {
+		if s.Due(cfg.Data.MaxAge) && (failedAt.IsZero() || time.Since(failedAt) >= retry) {
 			if _, err := prepareData(ctx, cfg, st); err != nil {
 				if ctx.Err() != nil {
 					return

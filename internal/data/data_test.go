@@ -21,7 +21,7 @@ func TestForRunIsAnEmptyDirectoryBeforeAnythingIsPrepared(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("ForRun = %s holding %v (%v), want an empty directory", dir, entries, err)
 	}
-	if !s.Due(time.Hour, time.Minute) {
+	if !s.Due(time.Hour) {
 		t.Error("nothing prepared is not due")
 	}
 }
@@ -56,11 +56,11 @@ func TestPreparePublishesAGeneration(t *testing.T) {
 	if fi, _ := os.Stat(s.Dir); fi.Mode().Perm() != 0o700 {
 		t.Errorf("store mode %v, want 0700", fi.Mode().Perm())
 	}
-	if s.Due(time.Hour, time.Minute) {
+	if s.Due(time.Hour) {
 		t.Error("a generation prepared just now is due")
 	}
 	now = now.Add(2 * time.Hour)
-	if !s.Due(time.Hour, time.Minute) {
+	if !s.Due(time.Hour) {
 		t.Error("a two-hour-old generation is not due at one hour")
 	}
 }
@@ -119,7 +119,8 @@ func TestPruneKeepsWhatIsInUse(t *testing.T) {
 // The next prepare starts ahead of the deadline by twice the last one's
 // duration, so the data is replaced before it is older than maxAge.
 func TestDueLeavesTimeForThePrepare(t *testing.T) {
-	now := time.Date(2026, 11, 27, 4, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 11, 27, 4, 0, 0, 0, time.UTC)
+	now := start
 	s := Store{Dir: t.TempDir(), Now: clock(&now)}
 	if _, err := s.Prepare(context.Background(), "true", t.TempDir(), nil, time.Minute); err != nil {
 		t.Fatal(err)
@@ -128,16 +129,21 @@ func TestDueLeavesTimeForThePrepare(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(24*time.Hour - 21*time.Minute)
-	if s.Due(24*time.Hour, time.Hour) {
+	if s.Due(24 * time.Hour) {
 		t.Error("due 21 minutes before the deadline with a 10-minute prepare")
 	}
 	now = now.Add(time.Minute)
-	if !s.Due(24*time.Hour, time.Hour) {
+	if !s.Due(24 * time.Hour) {
 		t.Error("not due 20 minutes before the deadline with a 10-minute prepare")
 	}
-	// With no record of a prepare, the lead is the timeout.
+	// With no record of a prepare, the lead is a quarter of maxAge.
 	_ = os.Remove(filepath.Join(s.Dir, "prepare.took"))
-	if !s.Due(24*time.Hour, time.Hour) {
-		t.Error("not due within the timeout of the deadline")
+	now = start.Add(18*time.Hour - time.Minute)
+	if s.Due(24 * time.Hour) {
+		t.Error("due more than six hours before the deadline with no record")
+	}
+	now = start.Add(18 * time.Hour)
+	if !s.Due(24 * time.Hour) {
+		t.Error("not due six hours before the deadline with no record")
 	}
 }
