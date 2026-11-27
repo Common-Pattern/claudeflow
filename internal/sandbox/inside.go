@@ -107,12 +107,13 @@ func Inside(ctx context.Context, specPath string) (int, error) {
 
 	note("starting the agent")
 	proc, err := runner.Start(ctx, runner.Spawn{
-		Command: spec.Command,
-		Args:    spec.Args,
-		Dir:     spec.Workdir,
-		Env:     env,
-		Timeout: spec.Timeout,
-		LogPath: spec.Log,
+		Command:              spec.Command,
+		Args:                 spec.Args,
+		Dir:                  spec.Workdir,
+		Env:                  env,
+		Timeout:              spec.Timeout,
+		LogPath:              spec.Log,
+		PromptOffCommandLine: true,
 	})
 	if err != nil {
 		note("could not start the agent: %v", err)

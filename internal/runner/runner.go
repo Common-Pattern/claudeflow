@@ -113,6 +113,9 @@ type Spawn struct {
 	LogPath string
 	// StopGrace overrides DefaultStopGrace for this process.
 	StopGrace time.Duration
+	// PromptOffCommandLine hands the agent its prompt and appended system
+	// prompt other than as arguments. See offCommandLine.
+	PromptOffCommandLine bool
 }
 
 // Process is a started child and its supervision.
@@ -174,9 +177,35 @@ func Start(ctx context.Context, s Spawn) (*Process, error) {
 		logs = f
 	}
 
-	cmd := exec.Command(s.Command, s.Args...)
+	args := s.Args
+	var stdin *os.File
+	var extra []*os.File
+	if s.PromptOffCommandLine {
+		var err error
+		if args, stdin, extra, err = offCommandLine(s.Args); err != nil {
+			if logs != nil {
+				logs.Close()
+			}
+			return nil, err
+		}
+	}
+	// The child holds its own descriptors once it has started, or never will.
+	defer func() {
+		if stdin != nil {
+			stdin.Close()
+		}
+		for _, f := range extra {
+			f.Close()
+		}
+	}()
+
+	cmd := exec.Command(s.Command, args...)
 	cmd.Dir = s.Dir
 	cmd.Env = environ(s.Env)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	cmd.ExtraFiles = extra
 	cmd.Stdout = outw
 	cmd.Stderr = errw
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -203,6 +232,70 @@ func Start(ctx context.Context, s Spawn) (*Process, error) {
 	}
 	go p.supervise(ctx, s.Timeout)
 	return p, nil
+}
+
+// offCommandLine moves the agent's prompt to its standard input, and its
+// appended system prompt to a file it is handed open, as /dev/fd/N.
+//
+// As arguments they are the process's command line, which anything on the
+// machine reads in /proc and ps. An agent that stopped its dev servers by
+// killing every process whose command line mentioned vite killed itself: its
+// own instructions mention vite. Both files are unlinked before the agent
+// starts, so nothing is left behind however the run ends; the open descriptors
+// are all that hold them.
+func offCommandLine(args []string) (out []string, stdin *os.File, extra []*os.File, err error) {
+	fail := func(e error) ([]string, *os.File, []*os.File, error) {
+		if stdin != nil {
+			stdin.Close()
+		}
+		for _, f := range extra {
+			f.Close()
+		}
+		return nil, nil, nil, e
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		hasValue := i+1 < len(args)
+		switch {
+		case (a == "-p" || a == "--print") && hasValue && !strings.HasPrefix(args[i+1], "-") && stdin == nil:
+			if stdin, err = unlinkedFile(args[i+1]); err != nil {
+				return fail(err)
+			}
+			out = append(out, a)
+			i++
+		case a == "--append-system-prompt" && hasValue:
+			f, err := unlinkedFile(args[i+1])
+			if err != nil {
+				return fail(err)
+			}
+			extra = append(extra, f)
+			// ExtraFiles[k] is the child's descriptor 3+k.
+			out = append(out, "--append-system-prompt-file", "/dev/fd/"+strconv.Itoa(2+len(extra)))
+			i++
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, stdin, extra, nil
+}
+
+// unlinkedFile is an open file holding text, read from its start, with no
+// name left on disk.
+func unlinkedFile(text string) (*os.File, error) {
+	f, err := os.CreateTemp("", "claudeflow-prompt-*")
+	if err != nil {
+		return nil, fmt.Errorf("hand the agent its prompt: %w", err)
+	}
+	_ = os.Remove(f.Name())
+	if _, err := f.WriteString(text); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("hand the agent its prompt: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("hand the agent its prompt: %w", err)
+	}
+	return f, nil
 }
 
 // PID returns the child's process id, which is also its process group id.
