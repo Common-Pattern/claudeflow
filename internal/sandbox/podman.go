@@ -100,6 +100,10 @@ func (p Podman) RunArgs(s Start) []string {
 		"--label", labelSlot + "=" + strconv.Itoa(s.Slot),
 		"--label", labelRun + "=" + s.RunID,
 		"--init",
+		// No cap on processes beyond the operator's own, as a host run has:
+		// podman's default of 2048 is spent by a build tool that runs every
+		// package's tasks at once, and the run's nested stack shares it.
+		"--pids-limit=-1",
 		"--userns=keep-id",
 		"--device", "/dev/fuse",
 		"--device", "/dev/net/tun",

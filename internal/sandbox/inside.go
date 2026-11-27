@@ -46,6 +46,9 @@ func Inside(ctx context.Context, specPath string) (int, error) {
 	if spec.Stack {
 		cleanNestedEngine(ctx, note)
 	}
+	serveAPI(ctx, note)
+	checks := &Healthchecks{Podman: podman, Every: time.Second}
+	go checks.Run(ctx)
 	note("cloning %s into %s", spec.Remote, spec.Workdir)
 	if err := checkout(ctx, spec, note); err != nil {
 		note("checkout failed: %v", err)
@@ -73,6 +76,10 @@ func Inside(ctx context.Context, specPath string) (int, error) {
 			}
 		}
 		stack = compose.Compose{
+			// The nested engine is podman. `podman compose` hands off to
+			// Docker Compose when the image carries it, through the API
+			// serveAPI started, and to podman-compose when it does not.
+			Bin:      []string{"podman", "compose"},
 			File:     spec.ComposeFile,
 			Profiles: spec.ComposeProfiles,
 			Project:  stackProject,

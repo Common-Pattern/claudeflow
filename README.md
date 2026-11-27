@@ -499,6 +499,14 @@ command line or a file, and the CLI uses it in preference to the shared login.
 
 **What changes for a run.**
 
+- The nested podman is given what systemd gives the host's: an API socket,
+  with `DOCKER_HOST` pointing at it, and a runner for healthchecks. So the
+  stack, and anything the agent brings up itself, can use Docker Compose
+  (`podman compose` hands off to it when the image carries it, as the reference
+  image does), and `condition: service_healthy` and claudeflow's own readiness
+  wait see healthchecks pass. A run has no process limit beyond the operator's.
+- Use the upstream Node binary in a project image rather than Fedora's
+  `nodejs` packages: some native builds segfault on Fedora's.
 - Each slot keeps its nested image storage in a volume, so a stack's images
   are pulled once per slot rather than once per run. Containers, volumes and
   networks in it are removed before every run.

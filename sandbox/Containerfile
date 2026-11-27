@@ -14,9 +14,16 @@
 # Build it locally with:
 #
 #     podman build -t localhost/claudeflow-sandbox sandbox/
-FROM quay.io/podman/stable:latest
+# Pinned to the podman the host runs. Newer podman (6.2) records the
+# oom_score_adj of 0 that Docker Compose asks for, which a process at the
+# rootless session's 200 cannot set, so every exec into such a container fails
+# with "permission denied" — healthchecks included. 5.7 clamps it to 200.
+FROM quay.io/podman/stable:v5.7.0
 
-RUN dnf -y install git gh jq nodejs npm podman-compose && dnf clean all \
+# docker-compose is the compose provider: with it installed, `podman compose`
+# hands off to it, through the API socket claudeflow serves inside the sandbox.
+# podman-compose stays as the fallback a project can still choose.
+RUN dnf -y install --setopt=install_weak_deps=False git gh jq nodejs npm docker-compose podman-compose && dnf clean all \
  && npm install -g @anthropic-ai/claude-code \
  && npm cache clean --force
 

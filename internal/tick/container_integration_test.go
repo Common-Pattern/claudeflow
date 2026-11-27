@@ -44,7 +44,24 @@ func TestIntegrationEngineWithContainerSandbox(t *testing.T) {
 	seed := filepath.Join(dir, "seed")
 	sh(dir, "git", "init", "--quiet", "--bare", "--initial-branch=main", origin)
 	sh(dir, "git", "init", "--quiet", "--initial-branch=main", seed)
-	compose := "services:\n  web:\n    image: docker.io/library/nginx:alpine\n    ports:\n      - \"80\"\n"
+	// db has a healthcheck and web waits for it to pass: nested podman runs
+	// no healthchecks of its own, so this needs the sandbox to run them, and
+	// the condition needs Docker Compose, through the API the sandbox serves.
+	compose := `services:
+  db:
+    image: docker.io/library/alpine
+    command: ["sleep", "3600"]
+    healthcheck:
+      test: ["CMD-SHELL", "true"]
+      interval: 2s
+  web:
+    image: docker.io/library/nginx:alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "80"
+`
 	if err := os.WriteFile(filepath.Join(seed, "compose.yaml"), []byte(compose), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +79,8 @@ func TestIntegrationEngineWithContainerSandbox(t *testing.T) {
 	agent := `#!/bin/sh
 set -e
 curl -fsS "$CLAUDEFLOW_URL_WEB" >/dev/null && echo '{"type":"probe","web":"ok"}'
+podman compose version 2>/dev/null | grep -q "Docker Compose" && echo '{"type":"probe","compose":"docker"}'
+test "$(podman inspect -f '{{.State.Health.Status}}' cf-db-1)" = healthy && echo '{"type":"probe","health":"ok"}'
 if [ -z "$CLAUDEFLOW_FAILING_CHECKS" ]; then
   c="$CLAUDE_CONFIG_DIR/.credentials.json"
   grep -q sk-ant-oat01-first "$c" && grep -q sk-ant-ort01-host "$c" && echo '{"type":"probe","login":"shared"}'
@@ -142,7 +161,7 @@ fi
 		t.Fatalf("run = %+v, want one found by its sandbox", run)
 	}
 	waitUntil(t, 10*time.Minute, "the build to finish", func() bool { return !e.RunAlive(soleRun(t, e)) })
-	assertProbes(t, run.Log, `"login":"shared"`, `"account":"shared"`, `"web":"ok"`, `"build":"pushed"`)
+	assertProbes(t, run.Log, `"login":"shared"`, `"account":"shared"`, `"web":"ok"`, `"compose":"docker"`, `"health":"ok"`, `"build":"pushed"`)
 	// What the run's CLI writes there is the host's: a refreshed login, and
 	// the session's transcript in the host's history.
 	if got, _ := os.ReadFile(filepath.Join(hostClaude, hostlogin.File)); !strings.Contains(string(got), "refreshed-in-run") {
