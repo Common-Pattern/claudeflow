@@ -223,8 +223,11 @@ func (p Podman) Stop(ctx context.Context, name string) error {
 
 // Remove deletes the container, and with it the run's checkout and stack. The
 // slot's image storage is a volume and stays.
+//
+// Nothing in it is given time to stop: by now the agent has finished or been
+// stopped, and the rest is a stack that nothing will read again.
 func (p Podman) Remove(ctx context.Context, name string) error {
-	_, err := p.run(ctx, nil, "rm", "--force", "--ignore", "--time", "10", name)
+	_, err := p.run(ctx, nil, "rm", "--force", "--ignore", "--time", "0", name)
 	return err
 }
 
