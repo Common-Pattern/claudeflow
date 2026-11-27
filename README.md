@@ -507,6 +507,16 @@ command line or a file, and the CLI uses it in preference to the shared login.
   wait see healthchecks pass. A run has no process limit beyond the operator's.
 - Use the upstream Node binary in a project image rather than Fedora's
   `nodejs` packages: some native builds segfault on Fedora's.
+- The image's podman must be 6.2.1 or later (or 5.8.11 on the 5.x line). Earlier
+  6.x fails every exec into a container Docker Compose created, healthchecks
+  included, because the rootless session's `oom_score_adj` of 200 cannot be
+  lowered to the 0 Compose asks for. The reference image makes sure of it.
+- A `sandbox.mounts` source that does not exist yet is created as a directory,
+  as Docker does. That is what lets a run share a tool's lock directory in
+  `/run/user/<uid>`, which every boot empties. For pnpm, mount the host's store
+  at the same path, and its lock directories from `/run/user/<uid>` at
+  `/tmp/pnpm-store-operation-locks-<uid>` and `/tmp/pnpm-dir-locks-<uid>`, so the
+  host's pnpm and a run's wait for each other.
 - Each slot keeps its nested image storage in a volume, so a stack's images
   are pulled once per slot rather than once per run. Containers, volumes and
   networks in it are removed before every run.
