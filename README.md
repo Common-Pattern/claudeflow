@@ -165,7 +165,8 @@ repositories.
    access*.
 6. Under **Where can this GitHub App be installed?**, choose **Only on this
    account**.
-7. **Create it.** Note the **App ID** on the page that follows.
+7. **Create it.** Note the **App ID** and the **Client ID** on the page that
+   follows. Runner management uses the Client ID.
 8. **Generate a private key**, under *Private keys*. Store it where only you can
    read it:
 
@@ -196,7 +197,7 @@ repositories.
 Workflows is the only one you might leave out. Without it a run cannot change
 CI, and the run fails at the push, not quietly.
 
-To have claudeflow keep self-hosted Actions runners going as well
+To have claudeflow start self-hosted Actions runners on demand as well
 ([#11](https://github.com/Common-Pattern/claudeflow/issues/11)), also grant
 the following. Each is optional and does nothing until that feature exists.
 
