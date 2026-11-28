@@ -165,8 +165,7 @@ repositories.
    access*.
 6. Under **Where can this GitHub App be installed?**, choose **Only on this
    account**.
-7. **Create it.** Note the **App ID** and the **Client ID** on the page that
-   follows. Runner management uses the Client ID.
+7. **Create it.** Note the **App ID** on the page that follows.
 8. **Generate a private key**, under *Private keys*. Store it where only you can
    read it:
 
