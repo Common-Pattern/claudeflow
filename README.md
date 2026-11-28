@@ -129,6 +129,90 @@ install -m 0755 claudeflow ~/.local/bin/claudeflow
 Release archives are built for linux and darwin, amd64 and arm64. There is no
 windows build: claudeflow manages POSIX process groups and shells out to `sh`.
 
+## Creating the GitHub App
+
+> **Not used yet.** claudeflow still acts through `gh` and your own account
+> (see Prerequisites). Moving it onto a GitHub App is tracked in
+> [#10](https://github.com/Common-Pattern/claudeflow/issues/10). This section is
+> how to prepare the app, so the switch is a config change once it lands.
+
+With an app, claudeflow comments, opens pull requests and merges as
+`<app-name>[bot]` instead of as you. Your account then says only what you
+wrote, and you can approve claudeflow's pull requests, which GitHub does not let
+you do for pull requests opened in your own name. The app holds no long-lived
+token. claudeflow mints an hour-long installation token from the app's private
+key when it needs one, narrowed to the repository and the permissions that each
+run needs.
+
+**Make the app private, and make one per owner.** A private app can only be
+installed on the account that owns it. Repositories under an organization and
+repositories under your personal account therefore need an app each. That also
+keeps the two apart: no token from one app can reach the other owner's
+repositories.
+
+1. **Open the form.** For an organization, go to
+   `https://github.com/organizations/<org>/settings/apps/new`. For your personal
+   account, go to `https://github.com/settings/apps/new`. Both are under
+   Settings → Developer settings → GitHub Apps → New GitHub App.
+2. **Name it** something like `claudeflow-<owner>`. App names are unique across
+   GitHub, and the bot posts as `<name>[bot]`. The homepage URL is required but
+   unused, so the repository's URL will do.
+3. **Leave user authorization off.** Leave the callback URL empty, and do not
+   tick *Request user authorization (OAuth) during installation*. claudeflow
+   acts as the app, never as a user signing in through it.
+4. **Turn the webhook off.** Untick *Webhook → Active*, because claudeflow polls.
+5. **Set the repository permissions** below. Leave everything else at *No
+   access*.
+6. Under **Where can this GitHub App be installed?**, choose **Only on this
+   account**.
+7. **Create it.** Note the **App ID** on the page that follows.
+8. **Generate a private key**, under *Private keys*. Store it where only you can
+   read it:
+
+   ```sh
+   install -m 0600 ~/Downloads/<app-name>.*.private-key.pem ~/.config/claudeflow/keys/<owner>.pem
+   ```
+
+   The key is the app's only credential, so keep it out of every repository.
+   GitHub keeps no copy, so if you lose it, generate another and delete the
+   old one.
+9. **Install the app.** Go to *Install App*, pick the owner, and choose *Only
+   select repositories*. Select the projects claudeflow drives. Adding a project
+   later means adding it to this installation too.
+
+### Repository permissions
+
+| Permission | Access | What claudeflow does with it |
+| --- | --- | --- |
+| Contents | Read and write | clones, pushes run branches, compares, merges, deletes merged branches |
+| Pull requests | Read and write | opens, edits and merges pull requests; comments and replies to review comments |
+| Issues | Read and write | reads issues, sets and creates labels, comments, reads issue events |
+| Workflows | Read and write | lets a run push changes under `.github/workflows/`; GitHub rejects those pushes without it |
+| Actions | Read | lets the fix skill read failed CI logs |
+| Checks | Read | reads a pull request's checks |
+| Commit statuses | Read | reads a pull request's checks |
+| Metadata | Read | mandatory; GitHub selects it for you |
+
+Workflows is the only one you might leave out. Without it a run cannot change
+CI, and the run fails at the push, not quietly.
+
+To have claudeflow keep self-hosted Actions runners going as well
+([#11](https://github.com/Common-Pattern/claudeflow/issues/11)), also grant
+the following. Each is optional and does nothing until that feature exists.
+
+| Permission | Access | When |
+| --- | --- | --- |
+| Self-hosted runners (organization) | Read and write | runners registered to an organization |
+| Administration (repository) | Read and write | runners registered to a single repository, which is the only kind a personal account has |
+
+Administration covers far more than runners, such as repository settings and
+collaborators. Grant it only on an app installed on repositories you want
+claudeflow to host runners for.
+
+Changing an app's permissions later does not take effect straight away. Each
+installation has to accept the change: GitHub asks the owner under the
+installation's settings.
+
 ## The label state machine
 
 Labels carry the whole state of an issue. There is no lease file, no database,
